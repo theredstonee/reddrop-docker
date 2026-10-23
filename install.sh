@@ -111,6 +111,11 @@ fi
 PORT=$(sed -n 's/^RD_PORT=//p' .env | tail -1)
 [ -n "$DOMAIN" ] || DOMAIN=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env | tail -1)
 grep -q 'compose.port.yml' .env && MODUS="port" || MODUS="caddy"
+# --domain beim zweiten Aufruf: in der .env nachtragen, damit der Assistent sie vorwaehlt
+if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ]; then
+  [[ "$DOMAIN" =~ ^[a-z0-9.-]+$ ]] || { echo "FEHLER: ungueltige Domain: $DOMAIN"; exit 1; }
+  if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
+fi
 
 # 5. Starten
 # Ordner fuer Importe (Seite „Import“ → Server-Ordner), lesbar fuer den App-Nutzer (uid 1000)
