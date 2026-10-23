@@ -188,6 +188,14 @@ if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ "$VHOST" = "ja" ]; then
   elif command -v apache2ctl >/dev/null 2>&1; then webserver="apache2"
   elif command -v httpd >/dev/null 2>&1; then webserver="httpd"
   fi
+  # Gibt es fuer die Domain schon einen fremden Eintrag (z. B. das alte Zipline)? Dann nichts anfassen — umstellen
+  # ist ein bewusster Schritt (proxy_pass auf den RedDrop-Port), sonst stritten sich zwei Eintraege um die Domain.
+  fremd=$(grep -RlsE "^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]]+(.*[[:space:]])?${DOMAIN//./\\.}([[:space:];]|$)" /etc/nginx/sites-enabled /etc/nginx/conf.d /etc/apache2/sites-enabled /etc/httpd/conf.d 2>/dev/null | grep -v 'reddrop' | head -1 || true)
+  if [ -n "$fremd" ]; then
+    echo "==> Fuer $DOMAIN gibt es schon einen Eintrag: $fremd — den fasse ich nicht an."
+    echo "    Zum Umstellen dort proxy_pass auf http://127.0.0.1:$PORT setzen (Header wie in der Vorlage unten), dann den Webserver neu laden."
+    webserver=""
+  fi
   if [ -n "$webserver" ] && ja "==> Virtual Host fuer $DOMAIN in $webserver anlegen (Backup vorhandener Dateien, Konfigtest, Neuladen)?" "j"; then
     stempel=$(date +%Y%m%d-%H%M%S)
     if [ "$webserver" = "nginx" ]; then
@@ -235,7 +243,7 @@ server {
         if tu httpd -t; then tu systemctl reload httpd; vhost_angelegt="$webserver"; else echo "    FEHLER: httpd -t schlaegt fehl — $datei bitte pruefen."; fi
       fi
     fi
-  elif [ -z "$webserver" ]; then
+  elif [ -z "$webserver" ] && [ -z "$fremd" ]; then
     echo "==> Keinen nginx/Apache gefunden — die Vorlage fuer deinen Webserver steht unten."
   fi
 
