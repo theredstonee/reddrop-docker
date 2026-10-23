@@ -10,6 +10,9 @@
 #   docker-compose.yml:compose.port.yml    nur ein Port auf 127.0.0.1 hinter deinem nginx/Apache
 #
 # Die hochgeladenen Dateien liegen im Volume "dateien" (im Container /data).
+#
+# Virenscan (optional): ClamAV laeuft nur mit dem Profil "virenscan" — COMPOSE_PROFILES=virenscan in der
+# .env (setzt install.sh bzw. der Schalter unter Einstellungen → Installation). Braucht ~1,5 GB RAM.
 services:
   app:
     image: ghcr.io/theredstonee/reddrop:latest
@@ -31,6 +34,8 @@ services:
       RD_S3_SECRET_KEY: ${RD_S3_SECRET_KEY:-}
       RD_S3_PATH_STYLE: ${RD_S3_PATH_STYLE:-}
       RD_S3_PREFIX: ${RD_S3_PREFIX:-}
+      # Virenscan: Adresse des clamd (Dienst "clamav" unten). Ohne laufenden Container prueft RedDrop nichts.
+      RD_CLAMAV: ${RD_CLAMAV:-clamav:3310}
     volumes:
       - dateien:/data
       # Import (Seite „Import“ → Server-Ordner): alte Upload-Ordner von Zipline, XBackBone, Chibisafe …
@@ -59,6 +64,16 @@ services:
       timeout: 3s
       retries: 20
 
+  clamav:
+    image: clamav/clamav:1.4
+    profiles: ["virenscan"]
+    restart: unless-stopped
+    # Signaturen bleiben ueber Neustarts erhalten (sonst bei jedem Start ~300 MB neu laden)
+    volumes:
+      - clamav:/var/lib/clamav
+    expose: ["3310"]
+
 volumes:
   db:
   dateien:
+  clamav:

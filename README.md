@@ -4,7 +4,7 @@
 
 By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** für Teams und Firmen
 
-> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links. Works with ShareX and Flameshot. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur or Google Photos. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
+> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links — optionally end-to-end encrypted, as a gallery or as a paste with syntax highlighting. Passkeys, statistics, Discord/e-mail notifications, optional ClamAV virus scan. Works with ShareX and Flameshot. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur or Google Photos. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
 
 ---
 
@@ -12,19 +12,26 @@ By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** f�
 
 - **Hochladen, wie es passt:** Dateien ins Fenster ziehen, mit Strg + V einfügen oder über ShareX, Flameshot und curl senden. Große Dateien gehen in Stücken und setzen nach einem Abbruch fort.
 - **Jede Datei hat eine eigene Seite** mit Vorschau für Bilder, Videos, Audio, Text und Code. Dazu gibt es einen Direktlink (nur die Datei, wie bei einem Bild-Hoster), einen Download-Link und einen Raw-Link.
-- **Teilen mit Grenzen:** Ablaufdatum, Passwort, Höchstzahl an Aufrufen, eigener Linkname. Linknamen gibt es in fünf Stilen: Zufall, Wörter, Datum, Dateiname oder unsichtbar.
+- **Teilen mit Grenzen:** Ablaufdatum, Passwort, Höchstzahl an Aufrufen, eigener Linkname. Linknamen gibt es in sechs Stilen: Zufall, Wörter, Datum, Dateiname, UUID oder unsichtbar.
+- **Ende-zu-Ende-Verschlüsselung:** ein Schalter beim Hochladen. Verschlüsselt wird im Browser, der Schlüssel steckt nur im Link — der Server sieht nie den Inhalt.
+- **Text & Code:** einfügen, Sprache wählen oder erkennen lassen, mit Syntax-Hervorhebung teilen — auch mit Ablauf und „nach dem Lesen löschen“.
+- **Galerien:** ein Ordner als öffentliche Seite mit Großansicht, Diashow und „Alles als ZIP“.
 - **Embed-Designer:** So sieht dein Link in Discord, Telegram und WhatsApp aus (Titel, Text, Farbe, Bild).
 - **Medien:**
   - Video-Player mit Vorschau-Streifen beim Spulen und Audio-Player mit Wellenform
   - Vorschaubilder für alle Bilder und Videos
   - Bilder im Browser bearbeiten
 - **Datenschutz:** Standort- und Kameradaten werden verlustfrei entfernt. Bilder lassen sich optional nach WebP oder AVIF umwandeln.
-- **Ordner und Tags**, auch verschachtelt. Dazu Favoriten, Suche und Sammelaktionen.
+- **Ordner und Tags**, auch verschachtelt. Dazu Favoriten, Suche, Sammelaktionen und ein **Papierkorb** (30 Tage).
+- **Statistik:** Aufrufe pro Tag, Herkunft (Discord, Reddit …) und Länder — gezählt ohne IP-Adressen.
+- **Benachrichtigungen** per Discord-Webhook oder E-Mail: Datei-Anfragen, Speicher fast voll, Virenfund.
+- **Virenscan** (optional): ClamAV prüft jede Datei, Funde kommen in Quarantäne.
+- **Protokoll:** wer wann was gemacht hat — für jedes Konto, Admins sehen alles.
 - **Datei-Anfragen:** Andere laden über einen Link Dateien zu dir hoch, auch ohne Konto.
 - **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur und Google Fotos (Takeout). Mit dabei sind:
   - Konten samt Passwörtern, Ordner und Tags
   - alte Linknamen; alte Pfade wie `/u/abc.png` leiten auf die neue Datei weiter
-- **Mehrere Konten** mit Speicher-Kontingent sowie Zwei-Faktor-Anmeldung mit Notfall-Codes.
+- **Mehrere Konten** mit Speicher-Kontingent, Zwei-Faktor-Anmeldung mit Notfall-Codes und **Passkeys** (Fingerabdruck, Face ID, Sicherheitsschlüssel).
 - **Hell und dunkel, Deutsch und Englisch.** Dazu ein Einrichtungs-Assistent mit Domain-Prüfung und automatischem HTTPS.
 
 ### Pro
@@ -41,6 +48,7 @@ Pro wird mit einem Lizenzschlüssel freigeschaltet. Alles oben bleibt ohne Lizen
   - Nur bestimmte E-Mail-Domains zulassen, Gruppe → Admin.
   - Passwort-Anmeldung abschaltbar.
 - **Eigene Marke:** eigenes Logo und Browser-Symbol, eigener Text auf der Anmeldeseite, eigene Fußzeile und kein „Mit RedDrop geteilt“.
+- **Sicherung per Knopf:** die ganze Installation als eine ZIP-Datei — Datenbank und jede Datei, lokal wie aus S3. Auf jedem RedDrop-Server wieder einspielbar, Links bleiben gleich.
 
 Die Lizenz wird online geprüft. Ist der Lizenzserver einmal nicht erreichbar, läuft Pro 7 Tage weiter. Für Server ohne Internet gibt es eine Offline-Lizenzdatei. Alle Server einer Installation zählen als **eine** Installation.
 
@@ -49,7 +57,7 @@ Die Lizenz wird online geprüft. Ist der Lizenzserver einmal nicht erreichbar, l
 | | Minimum | Empfohlen |
 |---|---|---|
 | CPU | 1 vCPU | 2 vCPU (Videos) |
-| RAM | 1 GB | 2 GB |
+| RAM | 1 GB | 2 GB (mit Virenscan 3 GB) |
 | Speicher | 5 GB + deine Dateien | je nach Bedarf — oder S3 (Pro) |
 
 - Ein Linux-Server (Debian oder Ubuntu) mit Root-Zugriff.
@@ -108,7 +116,13 @@ Ohne Nachfragen geht es mit Schaltern:
 sudo bash install.sh --port 8080 --domain drop.deinefirma.de --email du@deinefirma.de
 ```
 
-`--no-vhost` lässt den Webserver unangetastet, `--caddy` erzwingt den eigenen Caddy.
+`--no-vhost` lässt den Webserver unangetastet, `--caddy` erzwingt den eigenen Caddy, `--virenscan` / `--no-virenscan` beantwortet die Frage nach ClamAV.
+
+### Virenscan
+
+Der Installer fragt einmal, ob ClamAV mitlaufen soll (eigener Container, etwa 1,5 GB Arbeitsspeicher). Später schaltest du ihn unter **Einstellungen → Installation** an und aus; der Update-Dienst auf dem Server startet bzw. stoppt den Container dann selbst. Geprüft wird jede Datei bis 100 MB, beim Einschalten auch alle vorhandenen. Ende-zu-Ende-verschlüsselte Dateien kann kein Virenscanner lesen, sie werden übersprungen.
+
+Von Hand: `COMPOSE_PROFILES=virenscan` in die `.env` schreiben und `docker compose up -d`.
 
 ## Upload-Werkzeuge
 
@@ -119,7 +133,7 @@ Im Panel unter **Upload-Werkzeuge** gibt es fertige Konfigurationen für **Share
 | `x-rd-expires` | Ablauf, z. B. `7d`, `12h` oder ein Datum |
 | `x-rd-max-views` | höchstens so viele Aufrufe |
 | `x-rd-password` | Passwort für die Datei |
-| `x-rd-name-style` | `zufall`, `woerter`, `datum`, `original`, `unsichtbar` |
+| `x-rd-name-style` | `zufall`, `woerter`, `datum`, `original`, `uuid`, `unsichtbar` |
 | `x-rd-folder` | Ordner-ID |
 
 ## Umzug aus einem anderen Dienst
@@ -143,12 +157,14 @@ Seite **Import** im Panel. Es gibt drei Wege:
 
 ## Update
 
+Am einfachsten im Panel: unten links in der Seitenleiste steht die Version — ein roter Punkt heißt „neue Version da“, Klick → **Jetzt aktualisieren**. Von Hand:
+
 ```bash
 cd /opt/reddrop
 docker compose pull && docker compose up -d
 ```
 
-Die Datenbank wird beim Start automatisch nachgezogen. Ein zweiter Aufruf von `sudo bash install.sh` macht dasselbe.
+Die Datenbank wird beim Start automatisch nachgezogen. Ein zweiter Aufruf von `sudo bash install.sh` macht dasselbe und bringt auch den Update-Dienst auf den neuesten Stand (nötig, damit der Virenscan-Schalter im Panel den Container steuern kann).
 
 ## Entfernen
 
@@ -160,6 +176,9 @@ Stoppt und entfernt die Container und die Webserver-Einträge von RedDrop (gesic
 
 ## Sicherung
 
+**Mit Pro:** Panel → **Sicherung** → **Jetzt sichern** lädt eine ZIP-Datei mit allem herunter. Einspielen geht auf derselben Seite (hochladen oder, bei sehr großen Sicherungen, die ZIP in den Ordner `import/` legen). Das ersetzt alles auf dem Server; schlägt etwas fehl, bleibt der alte Stand.
+
+**Ohne Pro, von Hand:**
 - **Datenbank:** `docker compose exec db pg_dump -U reddrop reddrop > reddrop.sql`
 - **Dateien:** das Volume `dateien` (im Container `/data`), bei S3 der Bucket.
 

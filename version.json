@@ -1,20 +1,28 @@
 {
-  "version": "1.0.2",
+  "version": "1.1.0",
   "datum": "2026-10-23",
   "hinweise": {
     "de": [
-      "Vor dem Hochladen: Link-Stil, Ablauf, Passwort, max. Aufrufe und Ordner wählen",
-      "Neuer Link-Stil UUID",
-      "Update per Klick unten links in der Seitenleiste",
-      "Detail-Fenster: Video und Links nebeneinander in voller Breite",
-      "Installer fragt nach der Sprache (English oder Deutsch)"
+      "Ende-zu-Ende-Verschlüsselung per Schalter beim Hochladen",
+      "Galerien: ein Ordner als öffentliche Seite mit Diashow und ZIP-Download",
+      "Text & Code einfügen mit Syntax-Hervorhebung",
+      "Papierkorb (30 Tage) und Protokoll für jedes Konto",
+      "Statistik: Aufrufe, Herkunft und Länder — ohne IP-Adressen",
+      "Benachrichtigungen per Discord oder E-Mail",
+      "Anmelden mit Passkey",
+      "Virenscan mit ClamAV (optional, im Panel umschaltbar)",
+      "Pro: Sicherung per Knopf — alles in einer ZIP-Datei"
     ],
     "en": [
-      "Before uploading: choose link style, expiry, password, max. views and folder",
-      "New UUID link style",
-      "One-click updates at the bottom left of the sidebar",
-      "Detail window: video and links side by side at full width",
-      "The installer asks for the language (English or German)"
+      "End-to-end encryption via a switch when uploading",
+      "Galleries: a folder as a public page with slideshow and ZIP download",
+      "Paste text & code with syntax highlighting",
+      "Trash (30 days) and an activity log for every account",
+      "Statistics: views, sources and countries — without IP addresses",
+      "Notifications via Discord or e-mail",
+      "Sign in with a passkey",
+      "Virus scan with ClamAV (optional, switchable in the panel)",
+      "Pro: one-click backup — everything in one ZIP file"
     ]
   }
 }

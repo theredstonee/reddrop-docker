@@ -12,6 +12,7 @@
 #
 # Schalter (optional):  --lang en|de  --port 8080  --domain drop.firma.de  --email du@firma.de
 #                       --caddy (Caddy erzwingen)  --no-vhost (keinen Virtual Host anlegen)
+#                       --virenscan / --no-virenscan (ClamAV mitstarten, ~1,5 GB RAM; sonst fragt er)
 #                       --uninstall / --deinstallieren (Container, Webserver-Eintraege, auf Wunsch alle Daten)
 # Ein zweiter Aufruf aktualisiert nur (Image ziehen, neu starten) und fragt nichts mehr.
 set -euo pipefail
@@ -29,7 +30,7 @@ else
   if { true </dev/tty; } 2>/dev/null; then exec bash ./install.sh "$@" </dev/tty; else exec bash ./install.sh "$@"; fi
 fi
 
-PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"; WEG=""; SPR=""
+PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"; WEG=""; SPR=""; VS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --lang) SPR="${2,,}"; shift 2 ;;
@@ -38,6 +39,8 @@ while [ $# -gt 0 ]; do
     --email) EMAIL="$2"; shift 2 ;;
     --caddy) MODUS="caddy"; shift ;;
     --no-vhost) VHOST="nein"; shift ;;
+    --virenscan) VS="ja"; shift ;;
+    --no-virenscan) VS="nein"; shift ;;
     --deinstallieren|--uninstall) WEG="ja"; shift ;;
     *) echo "Unknown option / Unbekannter Schalter: $1"; exit 1 ;;
   esac
@@ -190,6 +193,25 @@ if ! grep -q '^COMPOSE_FILE=' .env; then
     say "==> Caddy uebernimmt Port 80/443 und holt das Zertifikat selbst" "==> Caddy takes port 80/443 and gets the certificate by itself"
   fi
 fi
+# 4b. Virenscan (ClamAV als eigener Container) — einmal fragen, danach im Panel umschaltbar
+profil_setzen() { # profil_setzen an|aus  → COMPOSE_PROFILES in der .env um "virenscan" ergaenzen/kuerzen
+  local p; p=$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
+  p=$(echo " $p " | sed 's/ virenscan / /g' | xargs)
+  [ "$1" = "an" ] && p=$(echo "$p virenscan" | xargs)
+  sed -i '/^COMPOSE_PROFILES=/d' .env
+  [ -z "$p" ] || echo "COMPOSE_PROFILES=$(echo "$p" | tr ' ' ',')" >> .env
+}
+if [ -n "$VS" ]; then
+  profil_setzen "$([ "$VS" = "ja" ] && echo an || echo aus)"; grep -q '^RD_VIRENSCAN_GEFRAGT=' .env || echo "RD_VIRENSCAN_GEFRAGT=1" >> .env
+elif ! grep -q '^RD_VIRENSCAN_GEFRAGT=' .env; then
+  echo ""
+  say "==> Virenscan: ClamAV prueft jede hochgeladene Datei, Funde kommen in Quarantaene." "==> Virus scan: ClamAV checks every uploaded file, findings are quarantined."
+  say "    Braucht etwa 1,5 GB Arbeitsspeicher (dieser Server: ${ram_mb} MB). Spaeter im Panel umschaltbar." "    Needs about 1.5 GB of RAM (this server: ${ram_mb} MB). Can be switched later in the panel."
+  if [ "$ram_mb" -ge 3000 ]; then vs_vorgabe="j"; else vs_vorgabe="n"; fi
+  if ja "    $(s "Virenscan einschalten?" "Turn on the virus scan?")" "$vs_vorgabe"; then profil_setzen an; else profil_setzen aus; fi
+  echo "RD_VIRENSCAN_GEFRAGT=1" >> .env
+fi
+
 # Werte aus der .env (auch bei einem zweiten Aufruf)
 PORT=$(sed -n 's/^RD_PORT=//p' .env | tail -1)
 [ -n "$DOMAIN" ] || DOMAIN=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env | tail -1)
@@ -221,18 +243,38 @@ updater_einrichten() {
 set -uo pipefail
 DIR="$PWD"; DATEN="$daten"
 [ -f "\$DATEN/.update-anfrage" ] || exit 0
+aktion=\$(sed -n 's/.*"aktion":"\([a-z-]*\)".*/\1/p' "\$DATEN/.update-anfrage")
 rm -f "\$DATEN/.update-anfrage"
-status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$1" "\$(date -Is)" "\$2" > "\$DATEN/.update-status"; chmod 644 "\$DATEN/.update-status"; }
-status laeuft ""
-cd "\$DIR" || { status fehler "Ordner \$DIR fehlt"; exit 1; }
-if out=\$(docker compose pull app 2>&1 && docker compose up -d app 2>&1); then status fertig ""
-else status fehler "\$(echo "\$out" | tail -3 | tr '\n"\\\\' '   ')"; fi
+status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" > "\$DATEN/\$1"; chmod 644 "\$DATEN/\$1"; }
+kurz() { echo "\$1" | tail -3 | tr '\n"\\\\' '   '; }
+profil() { # profil an|aus — "virenscan" in COMPOSE_PROFILES der .env
+  local p; p=\$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
+  p=\$(echo " \$p " | sed 's/ virenscan / /g' | xargs)
+  [ "\$1" = "an" ] && p=\$(echo "\$p virenscan" | xargs)
+  sed -i '/^COMPOSE_PROFILES=/d' .env
+  [ -z "\$p" ] || echo "COMPOSE_PROFILES=\$(echo "\$p" | tr ' ' ',')" >> .env
+}
+cd "\$DIR" || { status .update-status fehler "Ordner \$DIR fehlt"; exit 1; }
+case "\${aktion:-update}" in
+  virenscan-an)
+    status .virenscan-status laeuft ""; profil an
+    if out=\$(docker compose up -d 2>&1); then status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
+  virenscan-aus)
+    # Erst stoppen (solange das Profil noch aktiv ist), dann aus der .env nehmen
+    status .virenscan-status laeuft ""
+    if out=\$(docker compose stop clamav 2>&1 && docker compose rm -f clamav 2>&1); then profil aus; status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
+  *)
+    status .update-status laeuft ""
+    dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="app clamav"
+    if out=\$(docker compose pull \$dienste 2>&1 && docker compose up -d \$dienste 2>&1); then status .update-status fertig ""
+    else status .update-status fehler "\$(kurz "\$out")"; fi ;;
+esac
 SKRIPT
   chmod 755 /usr/local/bin/reddrop-update
   printf '%s\n' "[Unit]" "Description=RedDrop: Update-Anfrage aus dem Panel" "[Path]" "PathExists=$daten/.update-anfrage" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/reddrop-update.path
   printf '%s\n' "[Unit]" "Description=RedDrop aktualisieren" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-update" > /etc/systemd/system/reddrop-update.service
   systemctl daemon-reload && systemctl enable --now reddrop-update.path >/dev/null 2>&1 || return 0
-  echo "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
+  printf '%s\naktionen=update virenscan\n' "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
   say "==> Update-Dienst eingerichtet (Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up (panel → version at the bottom left → “Update now”)"
 }
 updater_einrichten
