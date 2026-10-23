@@ -180,7 +180,7 @@ if [ -d .output ]; then docker compose up -d --build; else docker compose pull &
 
 # 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain).
 #    Als Funktion: laeuft auch nach der Einrichtung ueber den Kurzzeit-Link (Schritt 9) mit der dort gewaehlten Domain.
-vhost_angelegt=""
+vhost_angelegt=""; fremd=""
 vhost_einrichten() {
 if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ "$VHOST" = "ja" ]; then
   webserver=""
@@ -299,7 +299,146 @@ kurz_weg() {
   echo "==> Kurzzeit-Eintrag fuer http://${ip} wieder entfernt."
   kurz_datei=""
 }
-if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && [ -z "$DOMAIN" ] && [ "$VHOST" = "ja" ] && [[ "${ip:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "${RD_DRY_RUN:-}" != "1" ] && ! setup_fertig; then
+# 10. Umzug: Unter der Domain laeuft schon ein anderer Dienst (eigener Eintrag im Webserver, z. B. Zipline).
+#     Zipline wird komplett uebernommen — Konten mit Passwoertern, Ordner, Tags, Linknamen, alte /u/-Links,
+#     auch passwortgeschuetzte Dateien —, solange es noch laeuft. Erst danach zeigt die Domain auf RedDrop
+#     (der alte Eintrag wird vorher gesichert; ein Zurueck ist jederzeit moeglich).
+umzug_schl=""; umzug_ordner=""; umzug_netz=""; umzug_app=""
+umzug_api() { # umzug_api '<json>' → Antwort der internen Installer-Schnittstelle von RedDrop
+  docker compose exec -T app wget -qO- --header "x-rd-installer: $umzug_schl" --header "content-type: application/json" --post-data "$1" http://127.0.0.1:3000/api/internal/installer 2>/dev/null || true
+}
+json_wert() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p" | head -1; }
+umzug_aufraeumen() {
+  [ -n "$umzug_schl" ] && docker compose exec -T app rm -f /data/.installer-schluessel >/dev/null 2>&1 || true
+  # Nur Hardlinks und der Export (mit Geheimnissen der alten Instanz) — Ziplines eigene Dateien bleiben unberuehrt
+  [ -n "$umzug_ordner" ] && rm -rf "./import/$umzug_ordner"
+  [ -n "$umzug_netz" ] && docker network disconnect "$umzug_netz" "$umzug_app" >/dev/null 2>&1 || true
+  umzug_ordner=""; umzug_netz=""
+}
+umzug_lauf() { # umzug_lauf <json-fuer-aktion-zipline> → importiert und wartet, bis alles da ist
+  local antwort id st
+  antwort=$(umzug_api "$1")
+  id=$(echo "$antwort" | json_wert id)
+  [ -n "$id" ] || { echo "    FEHLER: Import liess sich nicht anlegen: $antwort"; return 1; }
+  echo -n "    Lese Zipline "
+  for _ in $(seq 1 360); do st=$(umzug_api "{\"aktion\":\"stand\",\"id\":$id}" | json_wert status); [ "$st" = "analyse" ] || break; echo -n "."; sleep 5; done
+  echo ""
+  if [ "$st" != "bereit" ]; then echo "    FEHLER: $(umzug_api "{\"aktion\":\"stand\",\"id\":$id}" | json_wert meldung)"; return 1; fi
+  antwort=$(umzug_api "{\"aktion\":\"stand\",\"id\":$id}")
+  echo "    Gefunden: $(echo "$antwort" | json_wert gesamt) Dateien, $(echo "$antwort" | json_wert nutzer) Konten — wird uebertragen …"
+  umzug_api "{\"aktion\":\"starten\",\"id\":$id}" >/dev/null
+  for _ in $(seq 1 4320); do
+    antwort=$(umzug_api "{\"aktion\":\"stand\",\"id\":$id}"); st=$(echo "$antwort" | json_wert status)
+    printf '\r    %s / %s Dateien (schon da %s, Fehler %s)   ' "$(echo "$antwort" | json_wert erledigt)" "$(echo "$antwort" | json_wert gesamt)" "$(echo "$antwort" | json_wert uebersprungen)" "$(echo "$antwort" | json_wert fehler)"
+    case "$st" in laeuft|pausiert) sleep 3 ;; *) break ;; esac
+  done
+  echo ""
+  [ "$st" = "fertig" ] || { echo "    Import endete mit Status: $st"; return 1; }
+}
+# Einen Durchgang vorbereiten und ausfuehren: Server-Export + Hardlinks der Dateien (kein Extra-Platz) —
+# oder, wenn Zipline seine Dateien nicht lokal hat (S3), direkt ueber Ziplines eigenes Docker-Netz.
+zipline_durchgang() { # zipline_durchgang <ziel-url> <container> <token>
+  local quelle stempel exp
+  stempel=$(date +%Y%m%d-%H%M%S)
+  quelle=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/zipline/uploads"}}{{.Source}}{{end}}{{end}}' "$2" 2>/dev/null || true)
+  if [ -n "$quelle" ] && [ -d "$quelle" ] && [ -n "$(ls -A "$quelle" 2>/dev/null)" ]; then
+    umzug_ordner="zipline-umzug-$stempel"
+    mkdir -p "./import/$umzug_ordner"
+    exp="./import/$umzug_ordner/zipline4_export_$stempel.json"
+    if ! curl -fsS --max-time 300 -H "authorization: $3" "$1/api/server/export?nometrics=true" -o "$exp" || ! grep -q '"export":"4"' "$exp"; then
+      echo "    FEHLER: Zipline gibt keinen Server-Export heraus — ist das der Token eines Super-Admins?"; umzug_aufraeumen; return 1
+    fi
+    chown 1000:1000 "$exp"; chmod 600 "$exp"
+    if [ "$(stat -c %d "$quelle")" = "$(stat -c %d ./import)" ]; then cp -al "$quelle/." "./import/$umzug_ordner/"
+    else echo "    Ziplines Dateien liegen auf einem anderen Laufwerk — kopiere sie (braucht einmal so viel Platz) …"; cp -a "$quelle/." "./import/$umzug_ordner/"; fi
+    umzug_lauf "{\"aktion\":\"zipline\",\"ordner\":\"$umzug_ordner\"}" || { umzug_aufraeumen; return 1; }
+  else
+    local zport
+    umzug_app=$(docker compose ps -q app)
+    umzug_netz=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$2" | awk '{print $1}')
+    zport=$(docker inspect -f '{{range $p, $v := .Config.ExposedPorts}}{{$p}} {{end}}' "$2" | grep -oE '^[0-9]+' | head -1)
+    docker network connect "$umzug_netz" "$umzug_app" 2>/dev/null || true
+    umzug_lauf "{\"aktion\":\"zipline\",\"url\":\"http://$2:${zport:-3000}\",\"token\":\"$3\"}" || { umzug_aufraeumen; return 1; }
+  fi
+  umzug_aufraeumen
+}
+umzug_anbieten() {
+  local ziel port zc zbild token stempel sicher datei projekt ok=""
+  datei=$(readlink -f "$fremd")
+  ziel=$(grep -oE '(proxy_pass|ProxyPass[[:space:]]+/)[[:space:]]+https?://[^;[:space:]]+' "$datei" | head -1 | awk '{print $NF}' | sed 's#/$##')
+  port=$(echo "$ziel" | sed -nE 's#^https?://[^/]+:([0-9]+).*#\1#p')
+  zc=""; zbild=""
+  if [ -n "$port" ]; then
+    zc=$(docker ps --format '{{.Names}} {{.Ports}}' | grep -E ":${port}->" | awk '{print $1}' | head -1 || true)
+    [ -n "$zc" ] && zbild=$(docker inspect -f '{{.Config.Image}}' "$zc" 2>/dev/null || true)
+  fi
+  echo ""
+  echo "==> $DOMAIN zeigt bisher auf ${ziel:-einen anderen Dienst}${zc:+ (Container $zc, $zbild)}."
+  if echo "$zbild" | grep -qi zipline; then
+    ja "    Zipline komplett nach RedDrop uebernehmen (Konten mit Passwoertern, Ordner, Tags, Linknamen, alte /u/-Links) und danach $DOMAIN umstellen?" "j" || return 1
+    echo "    Dafuer brauche ich deinen Zipline-Token: in Zipline oben rechts → Einstellungen (Settings) → Token kopieren."
+    echo "    Es muss ein Super-Admin sein (sonst kommen nicht alle Konten mit). Der Token wird nicht angezeigt und nirgends gespeichert."
+    token=""
+    if [ -t 0 ]; then read -r -s -p "    Zipline-Token: " token </dev/tty || true; echo ""; fi
+    [[ "$token" =~ ^[A-Za-z0-9._=+/-]{10,2000}$ ]] || { echo "    Kein gueltiger Token — Umzug uebersprungen. Spaeter einfach nochmal: sudo bash install.sh"; return 1; }
+    umzug_schl=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    docker compose exec -T app sh -c "umask 077; printf %s '$umzug_schl' > /data/.installer-schluessel"
+    trap 'umzug_aufraeumen' EXIT
+    trap 'echo; umzug_aufraeumen; exit 130' INT TERM
+    echo "==> Uebertrage Zipline (laeuft dabei normal weiter) …"
+    if ! zipline_durchgang "$ziel" "$zc" "$token"; then echo "    $DOMAIN bleibt bei Zipline. Erneut versuchen: sudo bash install.sh"; return 1; fi
+  else
+    ja "    $DOMAIN auf RedDrop umstellen? (Der bisherige Dienst ist unter dieser Domain dann nicht mehr erreichbar.)" "n" || return 1
+  fi
+  # Domain umstellen: im vorhandenen Eintrag nur das Ziel tauschen — Zertifikat und alles andere bleibt
+  stempel=$(date +%Y%m%d-%H%M%S); mkdir -p /root/reddrop-backup
+  sicher="/root/reddrop-backup/$(basename "$datei").bak-$stempel"
+  cp -a "$datei" "$sicher"
+  sed -i -E "s#(proxy_pass[[:space:]]+)https?://[^;[:space:]]+#\1http://127.0.0.1:${PORT}#; s#(ProxyPass(Reverse)?[[:space:]]+/[[:space:]]+)https?://[^[:space:]]+#\1http://127.0.0.1:${PORT}/#" "$datei"
+  if grep -q 'proxy_pass' "$datei" && ! grep -q 'proxy_set_header[[:space:]]\+Host' "$datei"; then
+    sed -i -E "s#^([[:space:]]*)(proxy_pass[[:space:]]+http://127\.0\.0\.1:${PORT};)#\1\2\n\1proxy_set_header Host \$host;\n\1proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;\n\1proxy_set_header X-Forwarded-Proto \$scheme;#" "$datei"
+  fi
+  if grep -q 'proxy_pass' "$datei" && ! grep -q 'client_max_body_size' "$datei"; then
+    sed -i -E "s#^([[:space:]]*)(proxy_pass[[:space:]]+http://127\.0\.0\.1:${PORT};)#\1\2\n\1client_max_body_size 0;#" "$datei"
+  fi
+  if grep -q 'proxy_pass' "$datei"; then nginx -t >/dev/null 2>&1 && { systemctl reload nginx 2>/dev/null || nginx -s reload; ok=1; }
+  elif command -v apache2ctl >/dev/null 2>&1; then apache2ctl configtest >/dev/null 2>&1 && { systemctl reload apache2; ok=1; }
+  elif command -v httpd >/dev/null 2>&1; then httpd -t >/dev/null 2>&1 && { systemctl reload httpd; ok=1; }
+  fi
+  if [ -z "$ok" ]; then
+    cp -a "$sicher" "$datei"
+    echo "    FEHLER: Konfigtest nach dem Umstellen fehlgeschlagen — alter Stand wiederhergestellt ($sicher)."; return 1
+  fi
+  echo "==> $DOMAIN zeigt jetzt auf RedDrop (alter Eintrag gesichert: $sicher)."
+  if [ -n "${token:-}" ]; then
+    echo "==> Hole nach, was waehrend der Uebertragung noch in Zipline hochgeladen wurde …"
+    zipline_durchgang "$ziel" "$zc" "$token" || true
+    docker compose exec -T app rm -f /data/.installer-schluessel >/dev/null 2>&1 || true
+    trap - EXIT INT TERM
+    token=""
+    projekt=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$zc" 2>/dev/null || true)
+    if ja "    Zipline jetzt stoppen? (Daten und Container bleiben fuer ein Zurueck erhalten)" "j"; then
+      if [ -n "$projekt" ]; then docker ps -q --filter "label=com.docker.compose.project=$projekt" | xargs -r docker stop >/dev/null; else docker stop "$zc" >/dev/null; fi
+      echo "    Zipline gestoppt."
+    fi
+    echo ""
+    echo "    Zurueck zu Zipline, falls noetig:"
+    echo "      cp $sicher $datei && systemctl reload nginx"
+    echo "      docker start \$(docker ps -aq --filter label=com.docker.compose.project=${projekt:-zipline})"
+  fi
+  echo ""
+  echo "==> Fertig. RedDrop laeuft unter  https://${DOMAIN}"
+  echo "    Die uebernommenen Zipline-Konten melden sich mit ihren bisherigen Passwoertern an."
+  return 0
+}
+
+# Schon eingerichtet und die Domain gehoert noch einem anderen Dienst? Dann gleich den Umzug anbieten.
+if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ -n "$fremd" ] && [ "${RD_DRY_RUN:-}" != "1" ] && setup_fertig; then
+  umzug_anbieten && exit 0
+fi
+
+# Kurzzeit-Link auch dann, wenn die Domain noch auf den alten Dienst zeigt (Einrichtung erst, dann Umzug)
+if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && { [ -z "$DOMAIN" ] || [ -n "$fremd" ]; } && [ "$VHOST" = "ja" ] && [[ "${ip:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "${RD_DRY_RUN:-}" != "1" ] && ! setup_fertig; then
   if command -v nginx >/dev/null 2>&1; then kurz_web="nginx"
   elif command -v apache2ctl >/dev/null 2>&1; then kurz_web="apache2"
   elif command -v httpd >/dev/null 2>&1; then kurz_web="httpd"
@@ -327,6 +466,7 @@ if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && [ -z "$DOMAIN" ] && [ "$
       echo "==> Oeffne jetzt im Browser:  http://${ip}   und gib den Setup-Code von oben ein."
       echo "    Waehle im Assistenten „Hinter eigenem Proxy“ und trage deine Domain ein — der Installer"
       echo "    legt danach den Virtual Host und das Zertifikat dafuer an. (Strg+C bricht ab.)"
+      [ -n "$fremd" ] && echo "    Hinweis: $DOMAIN zeigt noch auf den alten Dienst — nach der Einrichtung geht es hier im Terminal mit dem Umzug weiter."
       echo -n "    Warte auf die Einrichtung "
       for _ in $(seq 1 720); do setup_fertig && break; echo -n "."; sleep 10; done
       echo ""
@@ -339,6 +479,7 @@ if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && [ -z "$DOMAIN" ] && [ "$
           if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
           echo "==> Einrichtung abgeschlossen. Domain aus dem Assistenten: $DOMAIN"
           vhost_einrichten
+          if [ -n "$fremd" ]; then umzug_anbieten || true; exit 0; fi
           if [ -n "$vhost_angelegt" ]; then
             if [ -n "${https_ok:-}" ]; then echo "==> Fertig. RedDrop laeuft unter  https://${DOMAIN}"; else echo "==> Fertig. RedDrop laeuft unter  http://${DOMAIN}  (HTTPS: certbot --nginx -d ${DOMAIN} --redirect)"; fi
             exit 0
