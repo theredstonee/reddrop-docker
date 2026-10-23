@@ -1,0 +1,20 @@
+{
+  "version": "1.0.2",
+  "datum": "2026-10-23",
+  "hinweise": {
+    "de": [
+      "Vor dem Hochladen: Link-Stil, Ablauf, Passwort, max. Aufrufe und Ordner wählen",
+      "Neuer Link-Stil UUID",
+      "Update per Klick unten links in der Seitenleiste",
+      "Detail-Fenster: Video und Links nebeneinander in voller Breite",
+      "Installer fragt nach der Sprache (English oder Deutsch)"
+    ],
+    "en": [
+      "Before uploading: choose link style, expiry, password, max. views and folder",
+      "New UUID link style",
+      "One-click updates at the bottom left of the sidebar",
+      "Detail window: video and links side by side at full width",
+      "The installer asks for the language (English or German)"
+    ]
+  }
+}

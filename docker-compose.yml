@@ -19,6 +19,8 @@ services:
       TZ: ${TZ:-Europe/Berlin}
       # Notausgang bei verlorener Zwei-Faktor-Anmeldung, siehe README (normalerweise leer).
       RD_RESET_2FA: ${RD_RESET_2FA:-}
+      # Sprache bis zur Einrichtung (de|en) — fragt install.sh ab; danach gilt die Einstellung im Panel
+      RD_LANG: ${RD_LANG:-de}
       # Pro — mehrere Server: Name dieses Servers in der Server-Liste (sonst der Container-Name)
       RD_NODE_NAME: ${RD_NODE_NAME:-}
       # Pro — S3 fest vorgeben statt im Panel (leer = im Panel einstellen). Siehe README.
