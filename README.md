@@ -4,7 +4,7 @@
 
 By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** für Teams und Firmen
 
-> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links — optionally end-to-end encrypted, as a gallery or as a paste with syntax highlighting. Passkeys, statistics, Discord/e-mail notifications, optional ClamAV virus scan. Works with ShareX and Flameshot. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur or Google Photos. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
+> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links — optionally end-to-end encrypted, as a gallery or as a paste with syntax highlighting. Passkeys, statistics, Discord/e-mail notifications, optional ClamAV virus scan, REST API with webhooks, automatic storage rules. Works with ShareX and Flameshot. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur or Google Photos. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
 
 ---
 
@@ -27,6 +27,8 @@ By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** f�
 - **Benachrichtigungen** per Discord-Webhook oder E-Mail: Datei-Anfragen, Speicher fast voll, Virenfund.
 - **Virenscan** (optional): ClamAV prüft jede Datei, Funde kommen in Quarantäne.
 - **Protokoll:** wer wann was gemacht hat — für jedes Konto, Admins sehen alles.
+- **API und Webhooks:** eine dokumentierte REST-API (`/api/v1`, OpenAPI unter `/api/v1/openapi.json`) mit Token-Rechten (Hochladen, Lesen, Verwalten) und signierte Webhooks mit Wiederholung — für n8n, Zapier, Make oder eigene Skripte.
+- **Speicher-Regeln:** alte oder lange nicht angesehene Dateien räumen sich von selbst auf — in den Papierkorb, endgültig oder (mit S3) ausgelagert. Mit Vorschau, wie viele Dateien eine Regel trifft.
 - **Datei-Anfragen:** Andere laden über einen Link Dateien zu dir hoch, auch ohne Konto.
 - **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur und Google Fotos (Takeout). Mit dabei sind:
   - Konten samt Passwörtern, Ordner und Tags
@@ -49,6 +51,7 @@ Pro wird mit einem Lizenzschlüssel freigeschaltet. Alles oben bleibt ohne Lizen
   - Passwort-Anmeldung abschaltbar.
 - **Eigene Marke:** eigenes Logo und Browser-Symbol, eigener Text auf der Anmeldeseite, eigene Fußzeile und kein „Mit RedDrop geteilt“.
 - **Sicherung per Knopf:** die ganze Installation als eine ZIP-Datei — Datenbank und jede Datei, lokal wie aus S3. Auf jedem RedDrop-Server wieder einspielbar, Links bleiben gleich.
+- **Monitoring:** Systemseite mit Verläufen (Anfragen, Fehler, Antwortzeit, CPU, Arbeitsspeicher), Prometheus-Endpunkt `/metrics`, fertiges Grafana-Dashboard und Warnungen bei voller Platte, vielen Fehlern oder ausgefallenem Server.
 
 Die Lizenz wird online geprüft. Ist der Lizenzserver einmal nicht erreichbar, läuft Pro 7 Tage weiter. Für Server ohne Internet gibt es eine Offline-Lizenzdatei. Alle Server einer Installation zählen als **eine** Installation.
 
@@ -135,6 +138,33 @@ Im Panel unter **Upload-Werkzeuge** gibt es fertige Konfigurationen für **Share
 | `x-rd-password` | Passwort für die Datei |
 | `x-rd-name-style` | `zufall`, `woerter`, `datum`, `original`, `uuid`, `unsichtbar` |
 | `x-rd-folder` | Ordner-ID |
+
+## API und Webhooks
+
+- **Token:** Panel → **Upload-Werkzeuge** → Token mit den Rechten anlegen, die das Skript braucht (Hochladen, Lesen, Verwalten).
+- **Doku:** Panel → **API-Doku** — jeder Endpunkt mit curl-Beispiel für deine Adresse. Für Postman, Insomnia oder Code-Generatoren: `https://<deine-domain>/api/v1/openapi.json`.
+- **Webhooks:** Panel → **Webhooks**. Jede Zustellung trägt `X-RedDrop-Signature: t=<zeit>,v1=<HMAC-SHA256>`; Prüf-Code für Node.js, Python und PHP steht in der API-Doku. Ziele im eigenen Netz (192.168.x.x …) sind gesperrt, bis der Inhaber sie freigibt.
+
+```bash
+curl -H "Authorization: Bearer rd_…" https://drop.deinefirma.de/api/v1/files?per_page=10
+```
+
+## Monitoring (Pro)
+
+Panel → **System** → **Zugang einrichten** erzeugt ein Token für Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: reddrop
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      credentials: rdm_…
+    static_configs:
+      - targets: ['drop.deinefirma.de']
+```
+
+Laufen mehrere Server, jeden einzeln abfragen (jeder zählt seine eigenen Anfragen). Das Grafana-Dashboard gibt es auf derselben Seite zum Herunterladen.
 
 ## Umzug aus einem anderen Dienst
 

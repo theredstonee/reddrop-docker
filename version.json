@@ -1,28 +1,20 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "datum": "2026-10-23",
   "hinweise": {
     "de": [
-      "Ende-zu-Ende-Verschlüsselung per Schalter beim Hochladen",
-      "Galerien: ein Ordner als öffentliche Seite mit Diashow und ZIP-Download",
-      "Text & Code einfügen mit Syntax-Hervorhebung",
-      "Papierkorb (30 Tage) und Protokoll für jedes Konto",
-      "Statistik: Aufrufe, Herkunft und Länder — ohne IP-Adressen",
-      "Benachrichtigungen per Discord oder E-Mail",
-      "Anmelden mit Passkey",
-      "Virenscan mit ClamAV (optional, im Panel umschaltbar)",
-      "Pro: Sicherung per Knopf — alles in einer ZIP-Datei"
+      "API v1 mit Doku-Seite und OpenAPI-Beschreibung",
+      "Token mit Rechten: Hochladen, Lesen, Verwalten",
+      "Webhooks: signiert, mit Wiederholung und Zustellprotokoll",
+      "Speicher-Regeln: alte und vergessene Dateien räumen sich selbst auf",
+      "Pro: Monitoring mit Verläufen, Prometheus /metrics, Grafana-Dashboard und Warnungen"
     ],
     "en": [
-      "End-to-end encryption via a switch when uploading",
-      "Galleries: a folder as a public page with slideshow and ZIP download",
-      "Paste text & code with syntax highlighting",
-      "Trash (30 days) and an activity log for every account",
-      "Statistics: views, sources and countries — without IP addresses",
-      "Notifications via Discord or e-mail",
-      "Sign in with a passkey",
-      "Virus scan with ClamAV (optional, switchable in the panel)",
-      "Pro: one-click backup — everything in one ZIP file"
+      "API v1 with a docs page and OpenAPI description",
+      "Tokens with permissions: upload, read, manage",
+      "Webhooks: signed, with retries and a delivery log",
+      "Storage rules: old and forgotten files clean themselves up",
+      "Pro: monitoring with charts, Prometheus /metrics, Grafana dashboard and alerts"
     ]
   }
 }
