@@ -1,0 +1,62 @@
+# RedDrop — By TheRedStonee · https://www.theredstonee.de
+#
+# Start:   docker compose up -d
+# Danach:  die Adresse aus der Installation im Browser oeffnen und dem Assistenten folgen.
+# Den Setup-Code zeigt:  docker compose logs app | grep Setup-Code
+#
+# Diese Datei enthaelt nur App und Datenbank. Wie RedDrop nach aussen kommt, legt COMPOSE_FILE
+# in der .env fest (install.sh setzt das automatisch):
+#   docker-compose.yml:compose.caddy.yml   eigener Caddy auf Port 80/443 mit automatischem HTTPS
+#   docker-compose.yml:compose.port.yml    nur ein Port auf 127.0.0.1 hinter deinem nginx/Apache
+#
+# Die hochgeladenen Dateien liegen im Volume "dateien" (im Container /data).
+services:
+  app:
+    image: ghcr.io/theredstonee/reddrop:latest
+    restart: unless-stopped
+    environment:
+      NUXT_DB_URL: postgres://reddrop:${DB_PASSWORD:?Bitte DB_PASSWORD in .env setzen}@db:5432/reddrop
+      TZ: ${TZ:-Europe/Berlin}
+      # Notausgang bei verlorener Zwei-Faktor-Anmeldung, siehe README (normalerweise leer).
+      RD_RESET_2FA: ${RD_RESET_2FA:-}
+      # Pro — mehrere Server: Name dieses Servers in der Server-Liste (sonst der Container-Name)
+      RD_NODE_NAME: ${RD_NODE_NAME:-}
+      # Pro — S3 fest vorgeben statt im Panel (leer = im Panel einstellen). Siehe README.
+      RD_S3_ENDPOINT: ${RD_S3_ENDPOINT:-}
+      RD_S3_REGION: ${RD_S3_REGION:-}
+      RD_S3_BUCKET: ${RD_S3_BUCKET:-}
+      RD_S3_ACCESS_KEY: ${RD_S3_ACCESS_KEY:-}
+      RD_S3_SECRET_KEY: ${RD_S3_SECRET_KEY:-}
+      RD_S3_PATH_STYLE: ${RD_S3_PATH_STYLE:-}
+      RD_S3_PREFIX: ${RD_S3_PREFIX:-}
+    volumes:
+      - dateien:/data
+      # Import (Seite „Import“ → Server-Ordner): alte Upload-Ordner von Zipline, XBackBone, Chibisafe …
+      # hierhin kopieren oder verlinken. Nur lesend — RedDrop veraendert dort nichts.
+      - ./import:/import:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    # Nicht direkt nach aussen geoeffnet — erreichbar nur ueber Caddy oder den Port aus compose.port.yml.
+    expose: ["3000"]
+    # Zeit zum sauberen Abmelden (laufende Uploads, Server-Liste)
+    stop_grace_period: 20s
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reddrop
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: reddrop
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reddrop -d reddrop"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  db:
+  dateien:
