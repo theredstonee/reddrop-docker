@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # RedDrop — Installation auf einem Linux-Server (Debian/Ubuntu, auch RHEL-Verwandte).
-# Aufruf im Ordner mit den Dateien:  sudo bash install.sh
+# Einzeiler (legt alles nach /opt/reddrop, anderer Ordner: RD_DIR=/pfad davor):
+#   curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/install.sh | sudo bash
+# Oder im Ordner mit den Dateien:  sudo bash install.sh
+# Entfernen:  sudo bash /opt/reddrop/install.sh --deinstallieren
 #
 # Zwei Wege nach aussen, der Installer erkennt selbst, welcher passt:
 #   Caddy  — Port 80/443 sind frei: eigener Caddy mit automatischem HTTPS (Let's Encrypt).
@@ -9,11 +12,24 @@
 #
 # Schalter (optional):  --port 8080  --domain drop.firma.de  --email du@firma.de
 #                       --caddy (Caddy erzwingen)  --no-vhost (keinen Virtual Host anlegen)
+#                       --deinstallieren (Container, Webserver-Eintraege und auf Wunsch alle Daten entfernen)
 # Ein zweiter Aufruf aktualisiert nur (Image ziehen, neu starten) und fragt nichts mehr.
 set -euo pipefail
-cd "$(dirname "$0")"
+QUELLE="https://raw.githubusercontent.com/theredstonee/reddrop-docker/main"
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile install.sh .env.example README.md"
+# Ueber curl | bash gestartet (oder Dateien fehlen): alles nach /opt/reddrop holen und dort weitermachen
+if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then
+  cd "$(dirname "$0")"
+else
+  ZIEL="${RD_DIR:-/opt/reddrop}"
+  echo "==> Hole die Installationsdateien nach $ZIEL"
+  mkdir -p "$ZIEL" && cd "$ZIEL"
+  for f in $DATEIEN; do curl -fsSL -o "$f" "$QUELLE/$f" || { echo "FEHLER: $f konnte nicht geladen werden."; exit 1; }; done
+  # Fragen brauchen das Terminal (stdin ist bei curl | bash die Leitung) — ohne Terminal gelten die Vorgaben
+  if { true </dev/tty; } 2>/dev/null; then exec bash ./install.sh "$@" </dev/tty; else exec bash ./install.sh "$@"; fi
+fi
 
-PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"
+PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"; WEG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; MODUS="port"; shift 2 ;;
@@ -21,6 +37,7 @@ while [ $# -gt 0 ]; do
     --email) EMAIL="$2"; shift 2 ;;
     --caddy) MODUS="caddy"; shift ;;
     --no-vhost) VHOST="nein"; shift ;;
+    --deinstallieren|--uninstall) WEG="ja"; shift ;;
     *) echo "Unbekannter Schalter: $1"; exit 1 ;;
   esac
 done
@@ -40,6 +57,45 @@ belegt() { # lauscht etwas auf dem Port?
 }
 wer_lauscht() { ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | sed 's/users:(("//'; }
 
+# Deinstallieren: Container weg, Webserver-Eintraege weg (mit Backup), auf Wunsch auch alle Daten und der Ordner
+if [ -n "$WEG" ]; then
+  echo "==> RedDrop entfernen (Ordner: $PWD)"
+  daten="nein"
+  if ja "    Auch ALLE hochgeladenen Dateien und die Datenbank loeschen? Das laesst sich nicht rueckgaengig machen." "n"; then
+    bestaetigt=$(frage "    Zur Bestaetigung bitte  loeschen  eintippen" "")
+    [ "$bestaetigt" = "loeschen" ] && daten="ja" || { echo "    Nicht bestaetigt — Dateien und Datenbank bleiben erhalten."; }
+  fi
+  if [ -f docker-compose.yml ] && command -v docker >/dev/null 2>&1; then
+    if [ "$daten" = "ja" ]; then docker compose down -v --remove-orphans || true; else docker compose down --remove-orphans || true; fi
+    docker image rm ghcr.io/theredstonee/reddrop:latest >/dev/null 2>&1 || true
+  fi
+  stempel=$(date +%Y%m%d-%H%M%S); neu_laden=""
+  for datei in /etc/nginx/sites-enabled/reddrop.conf /etc/nginx/sites-enabled/reddrop-setup.conf /etc/nginx/sites-available/reddrop.conf /etc/nginx/sites-available/reddrop-setup.conf \
+               /etc/nginx/conf.d/reddrop.conf /etc/nginx/conf.d/reddrop-setup.conf /etc/apache2/sites-enabled/reddrop.conf /etc/apache2/sites-enabled/reddrop-setup.conf \
+               /etc/apache2/sites-available/reddrop.conf /etc/apache2/sites-available/reddrop-setup.conf /etc/httpd/conf.d/reddrop.conf /etc/httpd/conf.d/reddrop-setup.conf; do
+    if [ -L "$datei" ]; then rm -f "$datei"; neu_laden="ja"
+    elif [ -f "$datei" ]; then mkdir -p /root/reddrop-backup && cp -a "$datei" "/root/reddrop-backup/$(basename "$datei").bak-$stempel" && rm -f "$datei"; neu_laden="ja"; fi
+  done
+  if [ -n "$neu_laden" ]; then
+    if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then systemctl reload nginx 2>/dev/null || nginx -s reload; fi
+    if command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest >/dev/null 2>&1; then systemctl reload apache2; fi
+    echo "==> Webserver-Eintraege entfernt (Sicherung in /root/reddrop-backup)."
+  fi
+  dom=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env 2>/dev/null | tail -1 || true)
+  if [ -n "$dom" ] && command -v certbot >/dev/null 2>&1 && certbot certificates 2>/dev/null | grep -q "Certificate Name: $dom$"; then
+    ja "    Zertifikat fuer $dom auch loeschen?" "n" && certbot delete --cert-name "$dom" -n || true
+  fi
+  if [ "$daten" = "ja" ]; then
+    ordner="$PWD"; cd /
+    if ja "    Ordner $ordner auch loeschen (inkl. .env und import/)?" "j"; then rm -rf "$ordner"; echo "==> Ordner entfernt."; fi
+    echo "==> RedDrop ist vollstaendig entfernt."
+  else
+    echo "==> Container gestoppt und entfernt. Dateien, Datenbank und dieser Ordner sind noch da —"
+    echo "    neu starten mit  sudo bash install.sh  (gleiches Datenbank-Passwort aus der .env)."
+  fi
+  exit 0
+fi
+
 echo "==> RedDrop wird eingerichtet"
 
 # 1. Docker (falls noch nicht da)
@@ -49,7 +105,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 docker compose version >/dev/null 2>&1 || { echo "FEHLER: 'docker compose' fehlt. Bitte Docker aktualisieren."; exit 1; }
 for f in docker-compose.yml compose.caddy.yml compose.port.yml Caddyfile; do
-  [ -f "$f" ] || { echo "FEHLER: $f fehlt neben install.sh. Bitte alle Dateien aus dem Paket in diesen Ordner legen."; exit 1; }
+  [ -f "$f" ] || curl -fsSL -o "$f" "$QUELLE/$f" || { echo "FEHLER: $f fehlt neben install.sh und konnte nicht geladen werden."; exit 1; }
 done
 
 # 2. Bei wenig Arbeitsspeicher eine Auslagerungsdatei anlegen (unter 1,5 GB RAM, noch kein Swap)
@@ -122,8 +178,10 @@ fi
 mkdir -p import && chmod 755 import
 if [ -d .output ]; then docker compose up -d --build; else docker compose pull && docker compose up -d; fi
 
-# 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain)
+# 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain).
+#    Als Funktion: laeuft auch nach der Einrichtung ueber den Kurzzeit-Link (Schritt 9) mit der dort gewaehlten Domain.
 vhost_angelegt=""
+vhost_einrichten() {
 if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ "$VHOST" = "ja" ]; then
   webserver=""
   if command -v nginx >/dev/null 2>&1; then webserver="nginx"
@@ -204,6 +262,8 @@ server {
     fi
   fi
 fi
+}
+vhost_einrichten
 
 # 8. Auf die App warten und den Setup-Code zeigen
 echo "==> Warte auf den Start …"
@@ -215,6 +275,77 @@ ip=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | a
 echo ""
 docker compose logs app 2>/dev/null | grep -A1 -B2 'Setup-Code' | tail -5 || true
 echo ""
+
+# 9. Kurzzeit-Link: Port-Modus ohne Domain → die Einrichtung voruebergehend ueber http://<Server-IP> erlauben.
+#    Ein eigener Eintrag NUR fuer die IP (andere Domains im Webserver bleiben unberuehrt), geschuetzt durch
+#    den Setup-Code; nach der Einrichtung (oder bei Abbruch) wird er wieder entfernt. Wurde im Assistenten
+#    eine Domain eingetragen, bekommt sie danach ihren Virtual Host und das Zertifikat.
+setup_wert() { docker compose exec -T db psql -U reddrop -d reddrop -tAc "SELECT coalesce(value->>'$2', '') FROM settings WHERE key = '$1'" 2>/dev/null | tr -d '[:space:]'; }
+setup_fertig() { [ "$(setup_wert setup done)" = "true" ]; }
+kurz_datei=""; kurz_link=""; kurz_web=""
+kurz_weg() {
+  [ -n "$kurz_datei" ] || return 0
+  if [ "$kurz_web" = "apache2" ]; then a2dissite -q reddrop-setup.conf >/dev/null 2>&1 || true; fi
+  rm -f "$kurz_datei" ${kurz_link:+"$kurz_link"}
+  case "$kurz_web" in nginx) nginx -t >/dev/null 2>&1 && { systemctl reload nginx 2>/dev/null || nginx -s reload; } ;; apache2) systemctl reload apache2 ;; httpd) systemctl reload httpd ;; esac
+  echo "==> Kurzzeit-Eintrag fuer http://${ip} wieder entfernt."
+  kurz_datei=""
+}
+if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && [ -z "$DOMAIN" ] && [ "$VHOST" = "ja" ] && [[ "${ip:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "${RD_DRY_RUN:-}" != "1" ] && ! setup_fertig; then
+  if command -v nginx >/dev/null 2>&1; then kurz_web="nginx"
+  elif command -v apache2ctl >/dev/null 2>&1; then kurz_web="apache2"
+  elif command -v httpd >/dev/null 2>&1; then kurz_web="httpd"
+  fi
+  if [ -n "$kurz_web" ] && ja "==> Fuer die Einrichtung voruebergehend unter http://${ip} erreichbar machen? (eigener Eintrag nur fuer die IP, wird danach entfernt)" "j"; then
+    if [ "$kurz_web" = "nginx" ]; then
+      if [ -d /etc/nginx/sites-enabled ]; then kurz_datei=/etc/nginx/sites-available/reddrop-setup.conf; kurz_link=/etc/nginx/sites-enabled/reddrop-setup.conf
+      else kurz_datei=/etc/nginx/conf.d/reddrop-setup.conf; fi
+      printf '%s\n' "# RedDrop — nur fuer die Einrichtung, entfernt install.sh wieder" "server {" "    listen 80;" "    server_name ${ip};" "    client_max_body_size 0;" \
+        "    location / {" "        proxy_pass http://127.0.0.1:${PORT};" "        proxy_set_header Host \$host;" "        proxy_set_header X-Real-IP \$remote_addr;" \
+        "        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;" "        proxy_set_header X-Forwarded-Proto \$scheme;" "    }" "}" > "$kurz_datei"
+      [ -n "$kurz_link" ] && ln -sf "$kurz_datei" "$kurz_link"
+      if nginx -t >/dev/null 2>&1; then systemctl reload nginx 2>/dev/null || nginx -s reload; else echo "    nginx -t schlaegt fehl — Kurzzeit-Eintrag wieder entfernt."; kurz_weg; fi
+    else
+      if [ "$kurz_web" = "apache2" ]; then kurz_datei=/etc/apache2/sites-available/reddrop-setup.conf; else kurz_datei=/etc/httpd/conf.d/reddrop-setup.conf; fi
+      printf '%s\n' "# RedDrop — nur fuer die Einrichtung, entfernt install.sh wieder" "<VirtualHost *:80>" "    ServerName ${ip}" "    ProxyPreserveHost On" \
+        "    ProxyPass / http://127.0.0.1:${PORT}/" "    ProxyPassReverse / http://127.0.0.1:${PORT}/" "</VirtualHost>" > "$kurz_datei"
+      if [ "$kurz_web" = "apache2" ]; then a2enmod -q proxy proxy_http >/dev/null; a2ensite -q reddrop-setup.conf >/dev/null; apache2ctl configtest >/dev/null 2>&1 && systemctl reload apache2 || { echo "    Apache-Konfigtest schlaegt fehl — Kurzzeit-Eintrag wieder entfernt."; kurz_weg; }
+      else httpd -t >/dev/null 2>&1 && systemctl reload httpd || { echo "    httpd -t schlaegt fehl — Kurzzeit-Eintrag wieder entfernt."; kurz_weg; }; fi
+    fi
+    if [ -n "$kurz_datei" ]; then
+      trap 'echo; kurz_weg; exit 130' INT TERM
+      trap 'kurz_weg' EXIT
+      echo ""
+      echo "==> Oeffne jetzt im Browser:  http://${ip}   und gib den Setup-Code von oben ein."
+      echo "    Waehle im Assistenten „Hinter eigenem Proxy“ und trage deine Domain ein — der Installer"
+      echo "    legt danach den Virtual Host und das Zertifikat dafuer an. (Strg+C bricht ab.)"
+      echo -n "    Warte auf die Einrichtung "
+      for _ in $(seq 1 720); do setup_fertig && break; echo -n "."; sleep 10; done
+      echo ""
+      kurz_weg
+      trap - INT TERM EXIT
+      if setup_fertig; then
+        neu=$(setup_wert net domain | tr 'A-Z' 'a-z')
+        if [[ "$neu" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]]; then
+          DOMAIN="$neu"
+          if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
+          echo "==> Einrichtung abgeschlossen. Domain aus dem Assistenten: $DOMAIN"
+          vhost_einrichten
+          if [ -n "$vhost_angelegt" ]; then
+            if [ -n "${https_ok:-}" ]; then echo "==> Fertig. RedDrop laeuft unter  https://${DOMAIN}"; else echo "==> Fertig. RedDrop laeuft unter  http://${DOMAIN}  (HTTPS: certbot --nginx -d ${DOMAIN} --redirect)"; fi
+            exit 0
+          fi
+        else
+          echo "==> Einrichtung abgeschlossen, aber ohne Domain. Spaeter:  sudo bash install.sh --domain drop.deinefirma.de"
+          exit 0
+        fi
+      else
+        echo "==> Zeit abgelaufen. Einfach nochmal:  sudo bash install.sh"
+        exit 0
+      fi
+    fi
+  fi
+fi
 if [ "$MODUS" = "port" ]; then
   if [ -n "$vhost_angelegt" ]; then
     if [ -n "${https_ok:-}" ]; then echo "==> Fertig. Oeffne im Browser:  https://${DOMAIN}"; else echo "==> Fertig. Oeffne im Browser:  http://${DOMAIN}"; fi

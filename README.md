@@ -59,12 +59,11 @@ Die Lizenz wird online geprüft. Ist der Lizenzserver einmal nicht erreichbar, l
 ## Schnellstart
 
 ```bash
-mkdir reddrop && cd reddrop
-for f in docker-compose.yml compose.caddy.yml compose.port.yml Caddyfile install.sh; do curl -fsSLO "https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/$f"; done
-sudo bash install.sh
+curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/install.sh | sudo bash
 ```
 
 Das Skript erledigt Folgendes:
+- legt alles nach **`/opt/reddrop`** (anderer Ordner: `curl … | sudo RD_DIR=/srv/reddrop bash`)
 - installiert Docker, falls nötig
 - erzeugt ein Datenbank-Passwort und startet alles
 - zeigt am Ende die Adresse und den **Setup-Code**
@@ -99,6 +98,7 @@ Im Assistenten gibst du deine Domain ein. Er zeigt die erkannte Server-IP und de
 Läuft auf dem Server schon nginx, Apache oder ein Panel wie Plesk auf Port 80/443, merkt `install.sh` das und richtet RedDrop **ohne eigenen Caddy** ein:
 - Die App bekommt einen freien Port auf `127.0.0.1`.
 - Auf Nachfrage legt das Skript für deine Domain den Virtual Host an und holt per `certbot` das Zertifikat.
+- Noch keine Domain? Dann ist RedDrop **nur für die Einrichtung** unter `http://<Server-IP>` erreichbar: ein eigener Eintrag nur für die IP, geschützt durch den Setup-Code. Nach dem Assistenten entfernt das Skript ihn wieder und richtet für die Domain aus dem Assistenten Virtual Host und Zertifikat ein.
 
 Wichtig für große Uploads: im Webserver keine Größengrenze setzen (nginx: `client_max_body_size 0;`).
 
@@ -144,11 +144,19 @@ Seite **Import** im Panel. Es gibt drei Wege:
 ## Update
 
 ```bash
-cd reddrop
+cd /opt/reddrop
 docker compose pull && docker compose up -d
 ```
 
 Die Datenbank wird beim Start automatisch nachgezogen. Ein zweiter Aufruf von `sudo bash install.sh` macht dasselbe.
+
+## Entfernen
+
+```bash
+sudo bash /opt/reddrop/install.sh --deinstallieren
+```
+
+Stoppt und entfernt die Container und die Webserver-Einträge von RedDrop (gesichert nach `/root/reddrop-backup`). Dateien, Datenbank und Ordner werden nur nach einer Rückfrage und dem Eintippen von `loeschen` gelöscht; sonst bleiben sie für einen Neustart erhalten.
 
 ## Sicherung
 
