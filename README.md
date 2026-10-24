@@ -123,7 +123,7 @@ sudo bash install.sh --port 8080 --domain drop.deinefirma.de --email du@deinefir
 
 ### Cloudflare Tunnel (ohne offene Ports)
 
-Für Heimserver oder Server hinter einer Firewall: RedDrop baut über einen eigenen `cloudflared`-Container die Verbindung zu Cloudflare auf, Cloudflare liefert deine Domain samt HTTPS aus — Port 80/443 müssen nicht offen sein. Einrichten im Panel unter **Einstellungen → Installation → Cloudflare Tunnel**, auf zwei Wegen:
+Für Heimserver oder Server hinter einer Firewall: RedDrop baut über einen eigenen `cloudflared`-Container die Verbindung zu Cloudflare auf, Cloudflare liefert deine Domain samt HTTPS aus — Port 80/443 müssen nicht offen sein. Einrichten gleich im **Einrichtungs-Assistenten** (Schritt „Adresse & HTTPS“ → „Cloudflare Tunnel“) oder später im Panel unter **Einstellungen → Installation → Cloudflare Tunnel**, auf zwei Wegen:
 
 - **Tunnel-Token:** Tunnel im Cloudflare-Dashboard anlegen (Zero Trust → Networks → Tunnels), als Public Hostname deine Domain mit Service `HTTP` → `app:3000`, dann den Token im Panel einfügen.
 - **Automatisch:** ein Cloudflare-API-Token mit den Rechten „Account → Cloudflare Tunnel → Edit“ und „Zone → DNS → Edit“ einfügen — RedDrop legt Tunnel, Weiterleitung und DNS-Eintrag selbst an und räumt sie auf Wunsch wieder ab.

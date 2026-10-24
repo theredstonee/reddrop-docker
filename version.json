@@ -1,16 +1,16 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "datum": "2026-10-24",
   "hinweise": {
     "de": [
-      "Installer erkennt Heimserver hinter einem Router und nimmt die Heimnetz-IP",
-      "Kurzzeit-Link abgelehnt? RedDrop ist dann direkt unter http://IP:Port erreichbar",
-      "Einrichtungs-Assistent wählt dafür „Nur über die IP“ vor"
+      "Cloudflare Tunnel jetzt schon im Einrichtungs-Assistenten — ideal für Heimserver ohne offene Ports",
+      "Tunnel per Token oder automatisch per API-Token, weiter geht es, sobald er verbunden ist",
+      "Hinweise im Assistenten scrollen ins Bild"
     ],
     "en": [
-      "Installer detects home servers behind a router and uses the local network IP",
-      "Declined the temporary link? RedDrop is then reachable directly at http://IP:port",
-      "The setup wizard preselects “IP address only” for that"
+      "Cloudflare Tunnel now right in the setup wizard — ideal for home servers without open ports",
+      "Tunnel via token or automatically with an API token, you continue once it is connected",
+      "Messages in the wizard scroll into view"
     ]
   }
 }
