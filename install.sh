@@ -56,7 +56,7 @@ if locale charmap 2>/dev/null | grep -qi 'utf-\?8' || echo "${LANG:-}${LC_ALL:-}
 else
   Z_SCHRITT=">"; Z_OK="OK"; Z_FEHLER="X"; Z_FRAGE="?"; Z_PUNKT="-"; K_OL="+"; K_OR="+"; K_UL="+"; K_UR="+"; K_H="-"; K_V="|"; SPIN=('|' '/' '-' '\')
 fi
-VERSION_TXT=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1)
+VERSION_TXT=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1 || true)
 banner() {
   echo ""
   printf '%s\n' "${R}${B}   ██████╗ ███████╗██████╗ ${R2}██████╗ ██████╗  ██████╗ ██████╗ ${N}" \
@@ -209,7 +209,7 @@ if ! grep -q '^COMPOSE_FILE=' .env; then
   fi
   if [ -z "$MODUS" ]; then
     if belegt 80 || belegt 443; then
-      server=$(wer_lauscht 80); [ -n "$server" ] || server=$(wer_lauscht 443)
+      server=$(wer_lauscht 80 || true); [ -n "$server" ] || server=$(wer_lauscht 443 || true)
       echo ""
       say "==> Port 80/443 sind schon belegt (${server:-unbekannter Dienst})." "==> Port 80/443 are already in use (${server:-unknown service})."
       say "    RedDrop bekommt dann einen eigenen Port auf 127.0.0.1, und dein Webserver" "    RedDrop then gets its own port on 127.0.0.1, and your web server"
@@ -447,13 +447,13 @@ done
 # IP fuer Links und Kurzzeit-Eintrag: die oeffentliche nur, wenn sie auf dem Server selbst liegt (VPS).
 # Sonst steht der Server hinter einem Router (Heimnetz) — dann die IP, ueber die er ins Netz geht.
 ip_pub=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
-ip_lan=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)
+ip_lan=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1 || true)
 [ -n "$ip_lan" ] || ip_lan=$(hostname -I 2>/dev/null | awk '{print $1}')
 hinter_router=""
 if [ -n "$ip_pub" ] && ip -4 addr 2>/dev/null | grep -qF "inet ${ip_pub}/"; then ip="$ip_pub"
 elif [ -n "$ip_lan" ]; then ip="$ip_lan"; [ -n "$ip_pub" ] && [ "$ip_pub" != "$ip_lan" ] && hinter_router="ja"
 else ip="$ip_pub"; fi
-code=$(docker compose logs app 2>/dev/null | grep -o 'Setup-Code: *[A-F0-9]\{4\}-[A-F0-9]\{4\}' | tail -1 | sed 's/.*: *//')
+code=$(docker compose logs app 2>/dev/null | grep -o 'Setup-Code: *[A-F0-9]\{4\}-[A-F0-9]\{4\}' | tail -1 | sed 's/.*: *//' || true)
 echo ""
 if [ -n "$code" ]; then
   kasten "$R" "$(s "Setup-Code" "Setup code"):  $code" "$(s "Brauchst du gleich im Browser." "You need it in the browser in a moment.")"
@@ -662,7 +662,7 @@ if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && { [ -z "$DOMAIN" ] || [ 
       kurz_weg
       trap - INT TERM EXIT
       if setup_fertig; then
-        neu=$(setup_wert net domain | tr 'A-Z' 'a-z')
+        neu=$(setup_wert net domain | tr 'A-Z' 'a-z' || true)
         if [[ "$neu" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]]; then
           DOMAIN="$neu"
           if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
