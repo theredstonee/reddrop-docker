@@ -1,16 +1,16 @@
 {
-  "version": "1.3.0",
+  "version": "1.3.1",
   "datum": "2026-10-24",
   "hinweise": {
     "de": [
-      "Cloudflare Tunnel: RedDrop über deine Domain erreichbar, ohne offene Ports",
-      "Tunnel per Token aus dem Dashboard oder ganz automatisch per API-Token",
-      "Neuer, farbiger Installer mit Setup-Code im Kasten"
+      "Installer erkennt Heimserver hinter einem Router und nimmt die Heimnetz-IP",
+      "Kurzzeit-Link abgelehnt? RedDrop ist dann direkt unter http://IP:Port erreichbar",
+      "Einrichtungs-Assistent wählt dafür „Nur über die IP“ vor"
     ],
     "en": [
-      "Cloudflare Tunnel: RedDrop reachable at your domain without open ports",
-      "Tunnel via a dashboard token or fully automatic with an API token",
-      "New, colourful installer with the setup code in a box"
+      "Installer detects home servers behind a router and uses the local network IP",
+      "Declined the temporary link? RedDrop is then reachable directly at http://IP:port",
+      "The setup wizard preselects “IP address only” for that"
     ]
   }
 }
