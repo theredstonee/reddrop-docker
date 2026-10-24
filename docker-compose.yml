@@ -13,6 +13,9 @@
 #
 # Virenscan (optional): ClamAV laeuft nur mit dem Profil "virenscan" — COMPOSE_PROFILES=virenscan in der
 # .env (setzt install.sh bzw. der Schalter unter Einstellungen → Installation). Braucht ~1,5 GB RAM.
+#
+# Cloudflare Tunnel (optional): cloudflared laeuft nur mit dem Profil "tunnel" — eingeschaltet im Panel unter
+# Einstellungen → Installation (setzt RD_TUNNEL_TOKEN + COMPOSE_PROFILES ueber den Update-Dienst).
 services:
   app:
     image: ghcr.io/theredstonee/reddrop:latest
@@ -36,6 +39,8 @@ services:
       RD_S3_PREFIX: ${RD_S3_PREFIX:-}
       # Virenscan: Adresse des clamd (Dienst "clamav" unten). Ohne laufenden Container prueft RedDrop nichts.
       RD_CLAMAV: ${RD_CLAMAV:-clamav:3310}
+      # Cloudflare Tunnel: Status-Abfrage beim cloudflared-Container (Dienst "cloudflared" unten)
+      RD_TUNNEL_METRICS: ${RD_TUNNEL_METRICS:-cloudflared:2000}
     volumes:
       - dateien:/data
       # Import (Seite „Import“ → Server-Ordner): alte Upload-Ordner von Zipline, XBackBone, Chibisafe …
@@ -72,6 +77,17 @@ services:
     volumes:
       - clamav:/var/lib/clamav
     expose: ["3310"]
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    # Ziel im Cloudflare-Dashboard: http://app:3000 (die App in diesem Compose-Netz)
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
+    environment:
+      TUNNEL_TOKEN: ${RD_TUNNEL_TOKEN:-}
+    depends_on:
+      - app
 
 volumes:
   db:

@@ -64,7 +64,7 @@ Die Lizenz wird online geprüft. Ist der Lizenzserver einmal nicht erreichbar, l
 | Speicher | 5 GB + deine Dateien | je nach Bedarf — oder S3 (Pro) |
 
 - Ein Linux-Server (Debian oder Ubuntu) mit Root-Zugriff.
-- Port **80** und **443** von außen erreichbar, oder ein schon laufender nginx/Apache, hinter den sich RedDrop hängt.
+- Port **80** und **443** von außen erreichbar, ein schon laufender nginx/Apache, hinter den sich RedDrop hängt — oder ein [Cloudflare Tunnel](#cloudflare-tunnel-ohne-offene-ports), dann muss gar kein Port offen sein.
 - Für HTTPS eine (Sub-)Domain, deren DNS-A-Eintrag auf den Server zeigt.
 
 ## Schnellstart
@@ -120,6 +120,15 @@ sudo bash install.sh --port 8080 --domain drop.deinefirma.de --email du@deinefir
 ```
 
 `--no-vhost` lässt den Webserver unangetastet, `--caddy` erzwingt den eigenen Caddy, `--virenscan` / `--no-virenscan` beantwortet die Frage nach ClamAV.
+
+### Cloudflare Tunnel (ohne offene Ports)
+
+Für Heimserver oder Server hinter einer Firewall: RedDrop baut über einen eigenen `cloudflared`-Container die Verbindung zu Cloudflare auf, Cloudflare liefert deine Domain samt HTTPS aus — Port 80/443 müssen nicht offen sein. Einrichten im Panel unter **Einstellungen → Installation → Cloudflare Tunnel**, auf zwei Wegen:
+
+- **Tunnel-Token:** Tunnel im Cloudflare-Dashboard anlegen (Zero Trust → Networks → Tunnels), als Public Hostname deine Domain mit Service `HTTP` → `app:3000`, dann den Token im Panel einfügen.
+- **Automatisch:** ein Cloudflare-API-Token mit den Rechten „Account → Cloudflare Tunnel → Edit“ und „Zone → DNS → Edit“ einfügen — RedDrop legt Tunnel, Weiterleitung und DNS-Eintrag selbst an und räumt sie auf Wunsch wieder ab.
+
+Der Schalter braucht den Update-Dienst auf dem Server (einmal `sudo bash install.sh` bei älteren Installationen).
 
 ### Virenscan
 

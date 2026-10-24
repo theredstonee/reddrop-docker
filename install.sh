@@ -46,25 +46,73 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Aussehen: Farben nur im Terminal (RD_FARBE=1 erzwingt sie, NO_COLOR/TERM=dumb schaltet sie ab), Zeichen nur mit UTF-8
+if { [ -t 1 ] || [ -n "${RD_FARBE:-}" ]; } && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  R=$'\033[38;2;232;48;48m'; R2=$'\033[38;2;255;110;100m'; G=$'\033[38;2;74;222;128m'; Y=$'\033[38;2;251;191;36m'
+  C=$'\033[38;2;125;211;252m'; D=$'\033[2m'; B=$'\033[1m'; U=$'\033[4m'; N=$'\033[0m'
+else R=""; R2=""; G=""; Y=""; C=""; D=""; B=""; U=""; N=""; fi
+if locale charmap 2>/dev/null | grep -qi 'utf-\?8' || echo "${LANG:-}${LC_ALL:-}" | grep -qi 'utf-\?8'; then
+  Z_SCHRITT="▸"; Z_OK="✔"; Z_FEHLER="✖"; Z_FRAGE="?"; Z_PUNKT="·"; K_OL="╭"; K_OR="╮"; K_UL="╰"; K_UR="╯"; K_H="─"; K_V="│"; SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+else
+  Z_SCHRITT=">"; Z_OK="OK"; Z_FEHLER="X"; Z_FRAGE="?"; Z_PUNKT="-"; K_OL="+"; K_OR="+"; K_UL="+"; K_UR="+"; K_H="-"; K_V="|"; SPIN=('|' '/' '-' '\')
+fi
+VERSION_TXT=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1)
+banner() {
+  echo ""
+  printf '%s\n' "${R}${B}   ██████╗ ███████╗██████╗ ${R2}██████╗ ██████╗  ██████╗ ██████╗ ${N}" \
+                "${R}${B}   ██╔══██╗██╔════╝██╔══██╗${R2}██╔══██╗██╔══██╗██╔═══██╗██╔══██╗${N}" \
+                "${R}${B}   ██████╔╝█████╗  ██║  ██║${R2}██║  ██║██████╔╝██║   ██║██████╔╝${N}" \
+                "${R}${B}   ██╔══██╗██╔══╝  ██║  ██║${R2}██║  ██║██╔══██╗██║   ██║██╔═══╝ ${N}" \
+                "${R}${B}   ██║  ██║███████╗██████╔╝${R2}██████╔╝██║  ██║╚██████╔╝██║     ${N}" \
+                "${R}${B}   ╚═╝  ╚═╝╚══════╝╚═════╝ ${R2}╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ${N}"
+  echo "   ${D}Selbst gehostetes Datei- und Medien-Hosting ${Z_PUNKT} self-hosted file & media hosting${N}"
+  echo "   ${D}${VERSION_TXT:+v$VERSION_TXT  ${Z_PUNKT}  }by TheRedStonee ${Z_PUNKT} https://www.theredstonee.de/reddrop/${N}"
+  echo ""
+}
+# Kasten um wichtige Werte (Setup-Code, Adresse): kasten FARBE "Zeile" ["Zeile" …]
+kasten() {
+  local farbe="$1"; shift
+  local breit=0 z
+  for z in "$@"; do [ ${#z} -gt $breit ] && breit=${#z}; done
+  local linie; linie=$(printf "%$((breit + 4))s" "" | sed "s/ /${K_H}/g")
+  echo "  ${farbe}${K_OL}${linie}${K_OR}${N}"
+  # von Hand auffuellen: printf zaehlt Bytes, ${#z} Zeichen (Umlaute, „·“)
+  for z in "$@"; do printf '  %s%s%s  %s%s%s%*s  %s%s%s\n' "$farbe" "$K_V" "$N" "$B" "$z" "$N" $((breit - ${#z})) "" "$farbe" "$K_V" "$N"; done
+  echo "  ${farbe}${K_UL}${linie}${K_UR}${N}"
+}
+[ -n "${RD_KEIN_BANNER:-}" ] || banner
+
 # Sprache: Schalter → .env → fragen (Standard Englisch)
 [ -n "$SPR" ] || SPR=$(sed -n 's/^RD_LANG=//p' .env 2>/dev/null | tail -1 || true)
 if [ "$SPR" != "de" ] && [ "$SPR" != "en" ]; then
   SPR="en"
   if [ -t 0 ]; then
     echo ""
-    echo "  Language / Sprache:   1) English   2) Deutsch"
-    read -r -p "  [1] " wahl </dev/tty || true
+    echo "  ${Y}${Z_FRAGE}${N} ${B}Language / Sprache:${N}   ${C}1${N}) English   ${C}2${N}) Deutsch"
+    read -r -p "    [1] " wahl </dev/tty || true
     case "${wahl:-1}" in 2|de|d|deutsch|Deutsch) SPR="de" ;; esac
   fi
 fi
 s() { if [ "$SPR" = "de" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }   # s "deutsch" "english"
-say() { echo "$(s "$1" "$2")"; }
+say() { # Meldung je Art einfaerben: „==> Fertig/Done“ gruen, „==> “ Schritt, FEHLER/ERROR rot, eingerueckt = Detail
+  local m; m=$(s "$1" "$2")
+  m=$(printf '%s' "$m" | sed -E "s#(https?://[^ )\"']+)#${C}${U}\1${N}#g")
+  case "$m" in
+    "==> Fertig"*|"==> Done"*) echo ""; echo "${G}${B}${Z_OK} ${m#==> }${N}" ;;
+    "==> "*) echo "${R}${B}${Z_SCHRITT}${N} ${B}${m#==> }${N}" ;;
+    FEHLER:*|ERROR:*) echo "${R}${B}${Z_FEHLER} ${m}${N}" ;;
+    "    FEHLER"*|"    ERROR"*) echo "  ${R}${Z_FEHLER}${N} ${m#    }" ;;
+    "    "*) echo "  ${D}${K_V}${N} ${m#    }" ;;
+    *) echo "$m" ;;
+  esac
+}
 
 # Zum Testen: RD_DRY_RUN=1 zeigt Aenderungen am Webserver nur an, statt sie auszufuehren.
 tu() { if [ "${RD_DRY_RUN:-}" = "1" ]; then echo "    ($(s Probelauf "dry run")) $*"; else "$@"; fi; }
 frage() { # frage "Text" "Vorgabe" -> Antwort (ohne Terminal: Vorgabe)
   local antwort=""
-  if [ -t 0 ]; then read -r -p "$1 [$2] " antwort </dev/tty || true; fi
+  local text="$1"; text="${text#==> }"; text="${text#    }"
+  if [ -t 0 ]; then read -r -p "  ${Y}${Z_FRAGE}${N} ${text} ${D}[$2]${N} " antwort </dev/tty || true; fi
   echo "${antwort:-$2}"
 }
 ja() { # ja "Text" "j|n" -> 0 bei ja (akzeptiert j/ja/y/yes)
@@ -244,13 +292,14 @@ set -uo pipefail
 DIR="$PWD"; DATEN="$daten"
 [ -f "\$DATEN/.update-anfrage" ] || exit 0
 aktion=\$(sed -n 's/.*"aktion":"\([a-z-]*\)".*/\1/p' "\$DATEN/.update-anfrage")
+tok=\$(sed -n 's#.*"token":"\([A-Za-z0-9+/=_-]*\)".*#\1#p' "\$DATEN/.update-anfrage")
 rm -f "\$DATEN/.update-anfrage"
 status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" > "\$DATEN/\$1"; chmod 644 "\$DATEN/\$1"; }
 kurz() { echo "\$1" | tail -3 | tr '\n"\\\\' '   '; }
-profil() { # profil an|aus — "virenscan" in COMPOSE_PROFILES der .env
-  local p; p=\$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
-  p=\$(echo " \$p " | sed 's/ virenscan / /g' | xargs)
-  [ "\$1" = "an" ] && p=\$(echo "\$p virenscan" | xargs)
+profil() { # profil an|aus [name] — Profil (Standard "virenscan") in COMPOSE_PROFILES der .env
+  local n="\${2:-virenscan}" p; p=\$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
+  p=\$(echo " \$p " | sed "s/ \$n / /g" | xargs)
+  [ "\$1" = "an" ] && p=\$(echo "\$p \$n" | xargs)
   sed -i '/^COMPOSE_PROFILES=/d' .env
   [ -z "\$p" ] || echo "COMPOSE_PROFILES=\$(echo "\$p" | tr ' ' ',')" >> .env
 }
@@ -263,9 +312,19 @@ case "\${aktion:-update}" in
     # Erst stoppen (solange das Profil noch aktiv ist), dann aus der .env nehmen
     status .virenscan-status laeuft ""
     if out=\$(docker compose stop clamav 2>&1 && docker compose rm -f clamav 2>&1); then profil aus; status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
+  tunnel-an)
+    status .tunnel-status laeuft ""
+    [ -n "\$tok" ] || { status .tunnel-status fehler "Kein Tunnel-Token in der Anfrage"; exit 1; }
+    sed -i '/^RD_TUNNEL_TOKEN=/d' .env; echo "RD_TUNNEL_TOKEN=\$tok" >> .env; chmod 600 .env
+    profil an tunnel
+    if out=\$(docker compose up -d cloudflared 2>&1); then status .tunnel-status fertig ""; else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
+  tunnel-aus)
+    status .tunnel-status laeuft ""
+    if out=\$(docker compose stop cloudflared 2>&1 && docker compose rm -f cloudflared 2>&1); then profil aus tunnel; sed -i '/^RD_TUNNEL_TOKEN=/d' .env; status .tunnel-status fertig ""
+    else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
   *)
     status .update-status laeuft ""
-    dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="app clamav"
+    dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="\$dienste clamav"; grep -q '^COMPOSE_PROFILES=.*tunnel' .env && dienste="\$dienste cloudflared"
     if out=\$(docker compose pull \$dienste 2>&1 && docker compose up -d \$dienste 2>&1); then status .update-status fertig ""
     else status .update-status fehler "\$(kurz "\$out")"; fi ;;
 esac
@@ -274,7 +333,7 @@ SKRIPT
   printf '%s\n' "[Unit]" "Description=RedDrop: Update-Anfrage aus dem Panel" "[Path]" "PathExists=$daten/.update-anfrage" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/reddrop-update.path
   printf '%s\n' "[Unit]" "Description=RedDrop aktualisieren" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-update" > /etc/systemd/system/reddrop-update.service
   systemctl daemon-reload && systemctl enable --now reddrop-update.path >/dev/null 2>&1 || return 0
-  printf '%s\naktionen=update virenscan\n' "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
+  printf '%s\naktionen=update virenscan tunnel\n' "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
   say "==> Update-Dienst eingerichtet (Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up (panel → version at the bottom left → “Update now”)"
 }
 updater_einrichten
@@ -380,13 +439,19 @@ vhost_einrichten
 
 # 8. Auf die App warten und den Setup-Code zeigen
 say "==> Warte auf den Start …" "==> Waiting for the start …"
-for _ in $(seq 1 60); do
+for n in $(seq 1 60); do
   if docker compose logs app 2>/dev/null | grep -q 'Setup-Code\|bereit\|ready'; then break; fi
-  sleep 2
+  for k in 0 1 2 3 4 5 6 7; do [ -t 1 ] && printf '\r  %s%s%s %s' "$R" "${SPIN[$(( (n * 8 + k) % ${#SPIN[@]} ))]}" "$N" "$(s "RedDrop startet" "RedDrop is starting") ($((n * 2)) s)"; sleep 0.25; done
 done
+[ -t 1 ] && printf '\r\033[K'
 ip=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+code=$(docker compose logs app 2>/dev/null | grep -o 'Setup-Code: *[A-F0-9]\{4\}-[A-F0-9]\{4\}' | tail -1 | sed 's/.*: *//')
 echo ""
-docker compose logs app 2>/dev/null | grep -A1 -B2 'Setup-Code' | tail -5 || true
+if [ -n "$code" ]; then
+  kasten "$R" "$(s "Setup-Code" "Setup code"):  $code" "$(s "Brauchst du gleich im Browser." "You need it in the browser in a moment.")"
+else
+  docker compose logs app 2>/dev/null | grep -A1 -B2 'Setup-Code' | tail -5 || true
+fi
 echo ""
 
 # 9. Kurzzeit-Link: Port-Modus ohne Domain → die Einrichtung voruebergehend ueber http://<Server-IP> erlauben.
@@ -627,3 +692,9 @@ else
   say "    Firewall: Port 80 und 443 muessen von aussen erreichbar sein." "    Firewall: port 80 and 443 must be reachable from outside."
 fi
 say "    Den Setup-Code siehst du oben (oder: docker compose logs app | grep Setup-Code)." "    You can see the setup code above (or: docker compose logs app | grep Setup-Code)."
+# Abschluss: Adresse noch einmal gross
+ziel_url=""
+if [ "$MODUS" = "port" ] && [ -n "${vhost_angelegt:-}" ] && [ -n "${DOMAIN:-}" ]; then ziel_url="$([ -n "${https_ok:-}" ] && echo https || echo http)://${DOMAIN}"
+elif [ "$MODUS" != "port" ]; then ziel_url="http://${ip}"; fi
+if [ -n "$ziel_url" ]; then echo ""; kasten "$G" "RedDrop  ${Z_PUNKT}  $ziel_url"; fi
+echo ""
