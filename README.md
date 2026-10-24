@@ -4,7 +4,7 @@
 
 By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** für Teams und Firmen
 
-> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links — optionally end-to-end encrypted, as a gallery or as a paste with syntax highlighting. Passkeys, statistics, Discord/e-mail notifications, optional ClamAV virus scan, REST API with webhooks, automatic storage rules. Works with ShareX and Flameshot. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur or Google Photos. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
+> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links — optionally end-to-end encrypted, as a gallery or as a paste with syntax highlighting. Passkeys, statistics, Discord/e-mail notifications, optional ClamAV virus scan, REST API with webhooks, automatic storage rules, CDN features (image resizing via URL, hotlink protection). Works with ShareX and Flameshot. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur, Google Photos or Tiny File Manager. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
 
 ---
 
@@ -28,9 +28,12 @@ By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** f�
 - **Virenscan** (optional): ClamAV prüft jede Datei, Funde kommen in Quarantäne.
 - **Protokoll:** wer wann was gemacht hat — für jedes Konto, Admins sehen alles.
 - **API und Webhooks:** eine dokumentierte REST-API (`/api/v1`, OpenAPI unter `/api/v1/openapi.json`) mit Token-Rechten (Hochladen, Lesen, Verwalten) und signierte Webhooks mit Wiederholung — für n8n, Zapier, Make oder eigene Skripte.
+- **Als CDN (beides standardmäßig aus):**
+  - **Bilder per URL anpassen:** `…/r/bild.png?w=800&h=600&fit=cover&format=webp&q=80` — Größe, Zuschnitt, Format (WebP, AVIF, JPEG, PNG oder `auto` = bestes, das der Browser kann) und Qualität. Jede Variante entsteht einmal und wird zwischengespeichert.
+  - **Hotlink-Schutz:** Direktlinks und Vorschaubilder nur auf erlaubten Websites einbinden; die eigene Domain ist immer erlaubt, Downloads bleiben offen.
 - **Speicher-Regeln:** alte oder lange nicht angesehene Dateien räumen sich von selbst auf — in den Papierkorb, endgültig oder (mit S3) ausgelagert. Mit Vorschau, wie viele Dateien eine Regel trifft.
 - **Datei-Anfragen:** Andere laden über einen Link Dateien zu dir hoch, auch ohne Konto.
-- **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur und Google Fotos (Takeout). Mit dabei sind:
+- **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur, Google Fotos (Takeout) und Tiny File Manager (Webordner samt Konten aus der `config.php`). Mit dabei sind:
   - Konten samt Passwörtern, Ordner und Tags
   - alte Linknamen; alte Pfade wie `/u/abc.png` leiten auf die neue Datei weiter
 - **Mehrere Konten** mit Speicher-Kontingent, Zwei-Faktor-Anmeldung mit Notfall-Codes und **Passkeys** (Fingerabdruck, Face ID, Sicherheitsschlüssel).
@@ -51,6 +54,7 @@ Pro wird mit einem Lizenzschlüssel freigeschaltet. Alles oben bleibt ohne Lizen
   - Passwort-Anmeldung abschaltbar.
 - **Eigene Marke:** eigenes Logo und Browser-Symbol, eigener Text auf der Anmeldeseite, eigene Fußzeile und kein „Mit RedDrop geteilt“.
 - **Sicherung per Knopf:** die ganze Installation als eine ZIP-Datei — Datenbank und jede Datei, lokal wie aus S3. Auf jedem RedDrop-Server wieder einspielbar, Links bleiben gleich.
+- **Traffic & Grenzen:** ausgelieferte Datenmenge pro Tag und Datei (bei Teil-Abrufen nur das übertragene Stück), Übersicht für alle Konten, monatliche Grenze pro Konto oder Rolle mit Warnung bei 80 % und 100 %.
 - **Monitoring:** Systemseite mit Verläufen (Anfragen, Fehler, Antwortzeit, CPU, Arbeitsspeicher), Prometheus-Endpunkt `/metrics`, fertiges Grafana-Dashboard und Warnungen bei voller Platte, vielen Fehlern oder ausgefallenem Server.
 
 Die Lizenz wird online geprüft. Ist der Lizenzserver einmal nicht erreichbar, läuft Pro 7 Tage weiter. Für Server ohne Internet gibt es eine Offline-Lizenzdatei. Alle Server einer Installation zählen als **eine** Installation.
