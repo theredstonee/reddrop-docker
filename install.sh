@@ -15,9 +15,11 @@
 #                       --virenscan / --no-virenscan (ClamAV mitstarten, ~1,5 GB RAM; sonst fragt er)
 #                       --uninstall / --deinstallieren (Container, Webserver-Eintraege, auf Wunsch alle Daten)
 # Ein zweiter Aufruf aktualisiert nur (Image ziehen, neu starten) und fragt nichts mehr.
+# Nur aktualisieren (nichts neu einrichten, keine Fragen):
+#   curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash
 set -euo pipefail
-QUELLE="https://raw.githubusercontent.com/theredstonee/reddrop-docker/main"
-DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile install.sh .env.example README.md version.json"
+QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"   # RD_QUELLE nur fuer Tests
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile install.sh update.sh .env.example README.md version.json"
 # Ueber curl | bash gestartet (oder Dateien fehlen): alles nach /opt/reddrop holen und dort weitermachen
 if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then
   cd "$(dirname "$0")"
@@ -30,7 +32,7 @@ else
   if { true </dev/tty; } 2>/dev/null; then exec bash ./install.sh "$@" </dev/tty; else exec bash ./install.sh "$@"; fi
 fi
 
-PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"; WEG=""; SPR=""; VS=""
+PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"; WEG=""; SPR=""; VS=""; NUR_DIENST=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --lang) SPR="${2,,}"; shift 2 ;;
@@ -39,6 +41,7 @@ while [ $# -gt 0 ]; do
     --email) EMAIL="$2"; shift 2 ;;
     --caddy) MODUS="caddy"; shift ;;
     --no-vhost) VHOST="nein"; shift ;;
+    --dienst) NUR_DIENST="ja"; shift ;;   # nur den Update-Dienst neu einrichten (ruft update.sh auf)
     --virenscan) VS="ja"; shift ;;
     --no-virenscan) VS="nein"; shift ;;
     --deinstallieren|--uninstall) WEG="ja"; shift ;;
@@ -172,6 +175,83 @@ if [ -n "$WEG" ]; then
   exit 0
 fi
 
+# 5b. Update-Dienst: der Knopf „Jetzt aktualisieren“ im Panel legt eine Anfrage-Datei in /data ab, ein
+#     systemd-Pfad-Dienst auf dem Server zieht dann das neue Image und startet die App neu. So braucht
+#     RedDrop selbst keinen Zugriff auf Docker.
+updater_einrichten() {
+  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || return 0
+  local app daten
+  app=$(docker compose ps -q app 2>/dev/null || true)
+  [ -n "$app" ] || return 0
+  daten=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$app" 2>/dev/null || true)
+  [ -n "$daten" ] && [ -d "$daten" ] || return 0
+  cat > /usr/local/bin/reddrop-update.neu <<SKRIPT
+#!/usr/bin/env bash
+# RedDrop — Update auf Anfrage aus dem Panel (angelegt von install.sh, systemd: reddrop-update.path)
+set -uo pipefail
+DIR="$PWD"; DATEN="$daten"; QUELLE="$QUELLE"
+[ -f "\$DATEN/.update-anfrage" ] || exit 0
+aktion=\$(sed -n 's/.*"aktion":"\([a-z-]*\)".*/\1/p' "\$DATEN/.update-anfrage")
+tok=\$(sed -n 's#.*"token":"\([A-Za-z0-9+/=_-]*\)".*#\1#p' "\$DATEN/.update-anfrage")
+rm -f "\$DATEN/.update-anfrage"
+status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" > "\$DATEN/\$1"; chmod 644 "\$DATEN/\$1"; }
+kurz() { echo "\$1" | tail -3 | tr '\n"\\\\' '   '; }
+profil() { # profil an|aus [name] — Profil (Standard "virenscan") in COMPOSE_PROFILES der .env
+  local n="\${2:-virenscan}" p; p=\$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
+  p=\$(echo " \$p " | sed "s/ \$n / /g" | xargs)
+  [ "\$1" = "an" ] && p=\$(echo "\$p \$n" | xargs)
+  sed -i '/^COMPOSE_PROFILES=/d' .env
+  [ -z "\$p" ] || echo "COMPOSE_PROFILES=\$(echo "\$p" | tr ' ' ',')" >> .env
+}
+cd "\$DIR" || { status .update-status fehler "Ordner \$DIR fehlt"; exit 1; }
+case "\${aktion:-update}" in
+  virenscan-an)
+    status .virenscan-status laeuft ""; profil an
+    if out=\$(docker compose up -d 2>&1); then status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
+  virenscan-aus)
+    # Erst stoppen (solange das Profil noch aktiv ist), dann aus der .env nehmen
+    status .virenscan-status laeuft ""
+    if out=\$(docker compose stop clamav 2>&1 && docker compose rm -f clamav 2>&1); then profil aus; status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
+  tunnel-an)
+    status .tunnel-status laeuft ""
+    [ -n "\$tok" ] || { status .tunnel-status fehler "Kein Tunnel-Token in der Anfrage"; exit 1; }
+    sed -i '/^RD_TUNNEL_TOKEN=/d' .env; echo "RD_TUNNEL_TOKEN=\$tok" >> .env; chmod 600 .env
+    profil an tunnel
+    if out=\$(docker compose up -d cloudflared 2>&1); then status .tunnel-status fertig ""; else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
+  tunnel-aus)
+    status .tunnel-status laeuft ""
+    if out=\$(docker compose stop cloudflared 2>&1 && docker compose rm -f cloudflared 2>&1); then profil aus tunnel; sed -i '/^RD_TUNNEL_TOKEN=/d' .env; status .tunnel-status fertig ""
+    else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
+  *)
+    status .update-status laeuft ""
+    # Erst das neueste update.sh holen: es bringt Dateien, Image und diesen Dienst selbst auf den neuesten Stand
+    neu=\$(mktemp)
+    if curl -fsSL --max-time 30 -o "\$neu" "\$QUELLE/update.sh?t=\$(date +%s)" 2>/dev/null && bash -n "\$neu" 2>/dev/null; then
+      RD_QUELLE="\$QUELLE" exec bash "\$neu" --dir "\$DIR" --status "\$DATEN/.update-status"
+    fi
+    rm -f "\$neu"
+    # GitHub nicht erreichbar: wie bisher nur die Images
+    dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="\$dienste clamav"; grep -q '^COMPOSE_PROFILES=.*tunnel' .env && dienste="\$dienste cloudflared"
+    if out=\$(docker compose pull \$dienste 2>&1 && docker compose up -d \$dienste 2>&1); then status .update-status fertig ""
+    else status .update-status fehler "\$(kurz "\$out")"; fi ;;
+esac
+SKRIPT
+  # erst fertig schreiben, dann umbenennen: ein gerade laufender Dienst liest so seine alte Fassung zu Ende
+  chmod 755 /usr/local/bin/reddrop-update.neu && mv -f /usr/local/bin/reddrop-update.neu /usr/local/bin/reddrop-update
+  printf '%s\n' "[Unit]" "Description=RedDrop: Update-Anfrage aus dem Panel" "[Path]" "PathExists=$daten/.update-anfrage" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/reddrop-update.path
+  printf '%s\n' "[Unit]" "Description=RedDrop aktualisieren" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-update" > /etc/systemd/system/reddrop-update.service
+  systemctl daemon-reload && systemctl enable --now reddrop-update.path >/dev/null 2>&1 || return 0
+  printf '%s\naktionen=update virenscan tunnel\nstand=2\n' "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
+  say "==> Update-Dienst eingerichtet (Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up (panel → version at the bottom left → “Update now”)"
+}
+
+# Nur den Update-Dienst neu einrichten (update.sh ruft das nach jedem Update auf) — ohne Fragen, sonst bleibt alles
+if [ -n "$NUR_DIENST" ]; then
+  mkdir -p import && chmod 755 import
+  updater_einrichten
+  exit 0
+fi
+
 say "==> RedDrop wird eingerichtet" "==> Setting up RedDrop"
 
 # 1. Docker (falls noch nicht da)
@@ -275,67 +355,7 @@ fi
 mkdir -p import && chmod 755 import
 if [ -d .output ]; then docker compose up -d --build; else docker compose pull && docker compose up -d; fi
 
-# 5b. Update-Dienst: der Knopf „Jetzt aktualisieren“ im Panel legt eine Anfrage-Datei in /data ab, ein
-#     systemd-Pfad-Dienst auf dem Server zieht dann das neue Image und startet die App neu. So braucht
-#     RedDrop selbst keinen Zugriff auf Docker.
-updater_einrichten() {
-  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || return 0
-  local app daten
-  app=$(docker compose ps -q app 2>/dev/null || true)
-  [ -n "$app" ] || return 0
-  daten=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$app" 2>/dev/null || true)
-  [ -n "$daten" ] && [ -d "$daten" ] || return 0
-  cat > /usr/local/bin/reddrop-update <<SKRIPT
-#!/usr/bin/env bash
-# RedDrop — Update auf Anfrage aus dem Panel (angelegt von install.sh, systemd: reddrop-update.path)
-set -uo pipefail
-DIR="$PWD"; DATEN="$daten"
-[ -f "\$DATEN/.update-anfrage" ] || exit 0
-aktion=\$(sed -n 's/.*"aktion":"\([a-z-]*\)".*/\1/p' "\$DATEN/.update-anfrage")
-tok=\$(sed -n 's#.*"token":"\([A-Za-z0-9+/=_-]*\)".*#\1#p' "\$DATEN/.update-anfrage")
-rm -f "\$DATEN/.update-anfrage"
-status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" > "\$DATEN/\$1"; chmod 644 "\$DATEN/\$1"; }
-kurz() { echo "\$1" | tail -3 | tr '\n"\\\\' '   '; }
-profil() { # profil an|aus [name] — Profil (Standard "virenscan") in COMPOSE_PROFILES der .env
-  local n="\${2:-virenscan}" p; p=\$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
-  p=\$(echo " \$p " | sed "s/ \$n / /g" | xargs)
-  [ "\$1" = "an" ] && p=\$(echo "\$p \$n" | xargs)
-  sed -i '/^COMPOSE_PROFILES=/d' .env
-  [ -z "\$p" ] || echo "COMPOSE_PROFILES=\$(echo "\$p" | tr ' ' ',')" >> .env
-}
-cd "\$DIR" || { status .update-status fehler "Ordner \$DIR fehlt"; exit 1; }
-case "\${aktion:-update}" in
-  virenscan-an)
-    status .virenscan-status laeuft ""; profil an
-    if out=\$(docker compose up -d 2>&1); then status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
-  virenscan-aus)
-    # Erst stoppen (solange das Profil noch aktiv ist), dann aus der .env nehmen
-    status .virenscan-status laeuft ""
-    if out=\$(docker compose stop clamav 2>&1 && docker compose rm -f clamav 2>&1); then profil aus; status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
-  tunnel-an)
-    status .tunnel-status laeuft ""
-    [ -n "\$tok" ] || { status .tunnel-status fehler "Kein Tunnel-Token in der Anfrage"; exit 1; }
-    sed -i '/^RD_TUNNEL_TOKEN=/d' .env; echo "RD_TUNNEL_TOKEN=\$tok" >> .env; chmod 600 .env
-    profil an tunnel
-    if out=\$(docker compose up -d cloudflared 2>&1); then status .tunnel-status fertig ""; else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
-  tunnel-aus)
-    status .tunnel-status laeuft ""
-    if out=\$(docker compose stop cloudflared 2>&1 && docker compose rm -f cloudflared 2>&1); then profil aus tunnel; sed -i '/^RD_TUNNEL_TOKEN=/d' .env; status .tunnel-status fertig ""
-    else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
-  *)
-    status .update-status laeuft ""
-    dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="\$dienste clamav"; grep -q '^COMPOSE_PROFILES=.*tunnel' .env && dienste="\$dienste cloudflared"
-    if out=\$(docker compose pull \$dienste 2>&1 && docker compose up -d \$dienste 2>&1); then status .update-status fertig ""
-    else status .update-status fehler "\$(kurz "\$out")"; fi ;;
-esac
-SKRIPT
-  chmod 755 /usr/local/bin/reddrop-update
-  printf '%s\n' "[Unit]" "Description=RedDrop: Update-Anfrage aus dem Panel" "[Path]" "PathExists=$daten/.update-anfrage" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/reddrop-update.path
-  printf '%s\n' "[Unit]" "Description=RedDrop aktualisieren" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-update" > /etc/systemd/system/reddrop-update.service
-  systemctl daemon-reload && systemctl enable --now reddrop-update.path >/dev/null 2>&1 || return 0
-  printf '%s\naktionen=update virenscan tunnel\n' "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
-  say "==> Update-Dienst eingerichtet (Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up (panel → version at the bottom left → “Update now”)"
-}
+# 5b. Update-Dienst einrichten (Funktion steht oben)
 updater_einrichten
 
 # 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain).

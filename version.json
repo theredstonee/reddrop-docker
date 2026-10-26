@@ -1,18 +1,16 @@
 {
-  "version": "1.5.0",
+  "version": "1.5.1",
   "datum": "2026-10-26",
   "hinweise": {
     "de": [
-      "Import aus iCloud: Apple-Datenexport (Fotos + Drive), geteilte Alben und Drive-Links per Link, oder direkt mit Apple-ID (ganze Mediathek im Original)",
-      "HEIC-Fotos vom iPhone: Original bleibt, Vorschau, Direktlink und Galerie zeigen ein JPEG — GPS-Daten werden verlustfrei entfernt",
-      "Live Photos: das kurze Video hängt am Foto und spielt beim Drüberfahren",
-      "Live-Videos und JPEG-Ansichten wandern mit Sicherung, Papierkorb und S3-Umzug"
+      "Neu: update.sh aktualisiert nur, richtet nichts neu ein und fragt nichts: curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash",
+      "„Jetzt aktualisieren“ im Panel bringt jetzt auch Compose-Dateien und den Update-Dienst selbst auf den neuesten Stand (alte Dateien landen in .sicherung/)",
+      "Ist der Dienst auf dem Server noch eine alte Fassung, zeigt das Panel den Befehl zum Kopieren — einmal ausführen, danach geht alles per Knopf"
     ],
     "en": [
-      "Import from iCloud: Apple data export (Photos + Drive), shared albums and Drive links, or directly with your Apple ID (whole library in original quality)",
-      "HEIC photos from iPhone: the original stays, preview, direct link and gallery show a JPEG — GPS data is removed losslessly",
-      "Live Photos: the short video is attached to the photo and plays on hover",
-      "Live videos and JPEG views move along with backups, trash and S3 migration"
+      "New: update.sh only updates, sets nothing up again and asks nothing: curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash",
+      "“Update now” in the panel now also brings the compose files and the update service itself up to date (old files go to .sicherung/)",
+      "If the service on the server is still an old version, the panel shows the command to copy — run it once, then everything works with one click"
     ]
   }
 }

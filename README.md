@@ -207,7 +207,15 @@ Seite **Import** im Panel. Es gibt drei Wege:
 
 ## Update
 
-Am einfachsten im Panel: unten links in der Seitenleiste steht die Version — ein roter Punkt heißt „neue Version da“, Klick → **Jetzt aktualisieren**. Von Hand:
+Am einfachsten im Panel: unten links in der Seitenleiste steht die Version — ein roter Punkt heißt „neue Version da“, Klick → **Jetzt aktualisieren**. Das holt das neue Image, die aktuellen Compose-Dateien und bringt auch den Update-Dienst selbst auf den neuesten Stand.
+
+Auf dem Server geht dasselbe mit einem Befehl — er richtet **nichts neu ein**, fragt nichts und lässt `.env`, Daten und Domain, wie sie sind (alte Dateien landen in `.sicherung/`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash
+```
+
+Installationen von vor diesem Befehl brauchen ihn **einmal** — danach aktualisiert der Knopf im Panel auch den Dienst. Ganz von Hand, nur das Image:
 
 ```bash
 cd /opt/reddrop
