@@ -143,6 +143,7 @@ if [ -n "$WEG" ]; then
     docker image rm ghcr.io/theredstonee/reddrop:latest >/dev/null 2>&1 || true
   fi
   # Update-Dienst
+  rm -f /etc/cron.d/reddrop-update
   if [ -f /etc/systemd/system/reddrop-update.path ]; then
     systemctl disable --now reddrop-update.path >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/reddrop-update.path /etc/systemd/system/reddrop-update.service /usr/local/bin/reddrop-update
@@ -179,12 +180,14 @@ fi
 #     systemd-Pfad-Dienst auf dem Server zieht dann das neue Image und startet die App neu. So braucht
 #     RedDrop selbst keinen Zugriff auf Docker.
 updater_einrichten() {
-  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || return 0
+  DIENST_GRUND=""
   local app daten
   app=$(docker compose ps -q app 2>/dev/null || true)
-  [ -n "$app" ] || return 0
+  [ -n "$app" ] || { DIENST_GRUND="$(s "Der App-Container laeuft nicht (docker compose ps app ist leer)." "The app container is not running (docker compose ps app is empty).")"; return 1; }
   daten=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$app" 2>/dev/null || true)
-  [ -n "$daten" ] && [ -d "$daten" ] || return 0
+  # Docker als Snap: docker inspect nennt /var/lib/docker/…, auf dem Server liegt es unter /var/snap/docker/common/var-lib-docker/…
+  if [ -n "$daten" ] && [ ! -d "$daten" ] && [ -d "/var/snap/docker/common/var-lib-docker${daten#/var/lib/docker}" ]; then daten="/var/snap/docker/common/var-lib-docker${daten#/var/lib/docker}"; fi
+  [ -n "$daten" ] && [ -d "$daten" ] || { DIENST_GRUND="$(s "Der Datenordner der App ($daten) ist vom Server aus nicht lesbar (Docker rootless oder in einer VM?)." "The app data folder ($daten) is not readable from the server (rootless Docker or inside a VM?).")"; return 1; }
   cat > /usr/local/bin/reddrop-update.neu <<SKRIPT
 #!/usr/bin/env bash
 # RedDrop — Update auf Anfrage aus dem Panel (angelegt von install.sh, systemd: reddrop-update.path)
@@ -238,17 +241,27 @@ esac
 SKRIPT
   # erst fertig schreiben, dann umbenennen: ein gerade laufender Dienst liest so seine alte Fassung zu Ende
   chmod 755 /usr/local/bin/reddrop-update.neu && mv -f /usr/local/bin/reddrop-update.neu /usr/local/bin/reddrop-update
-  printf '%s\n' "[Unit]" "Description=RedDrop: Update-Anfrage aus dem Panel" "[Path]" "PathExists=$daten/.update-anfrage" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/reddrop-update.path
-  printf '%s\n' "[Unit]" "Description=RedDrop aktualisieren" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-update" > /etc/systemd/system/reddrop-update.service
-  systemctl daemon-reload && systemctl enable --now reddrop-update.path >/dev/null 2>&1 || return 0
+  local ausloeser=""
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    printf '%s\n' "[Unit]" "Description=RedDrop: Update-Anfrage aus dem Panel" "[Path]" "PathExists=$daten/.update-anfrage" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/reddrop-update.path
+    printf '%s\n' "[Unit]" "Description=RedDrop aktualisieren" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-update" > /etc/systemd/system/reddrop-update.service
+    if systemctl daemon-reload && systemctl enable --now reddrop-update.path >/dev/null 2>&1; then ausloeser="systemd"; rm -f /etc/cron.d/reddrop-update; fi
+  fi
+  # Ohne systemd (z. B. Container-Server, Alpine): cron schaut jede Minute nach einer Anfrage
+  if [ -z "$ausloeser" ] && [ -d /etc/cron.d ] && { pgrep -x cron >/dev/null 2>&1 || pgrep -x crond >/dev/null 2>&1; }; then
+    printf '%s\n' "# RedDrop: Update-Anfrage aus dem Panel (angelegt von install.sh, ohne systemd)" "* * * * * root [ -f \"$daten/.update-anfrage\" ] && /usr/local/bin/reddrop-update >/dev/null 2>&1" > /etc/cron.d/reddrop-update
+    chmod 644 /etc/cron.d/reddrop-update; ausloeser="cron"
+  fi
+  [ -n "$ausloeser" ] || { DIENST_GRUND="$(s "Weder systemd noch cron laufen auf diesem Server – ohne einen davon kann der Knopf im Panel nichts ausloesen." "Neither systemd nor cron is running on this server – without one the panel button cannot trigger anything.")"; return 1; }
   printf '%s\naktionen=update virenscan tunnel\nstand=2\n' "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
-  say "==> Update-Dienst eingerichtet (Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up (panel → version at the bottom left → “Update now”)"
+  say "==> Update-Dienst eingerichtet ($ausloeser; Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up ($ausloeser; panel → version at the bottom left → “Update now”)"
 }
+
 
 # Nur den Update-Dienst neu einrichten (update.sh ruft das nach jedem Update auf) — ohne Fragen, sonst bleibt alles
 if [ -n "$NUR_DIENST" ]; then
   mkdir -p import && chmod 755 import
-  updater_einrichten
+  updater_einrichten || { say "FEHLER: Update-Dienst nicht eingerichtet: $DIENST_GRUND" "ERROR: update service not set up: $DIENST_GRUND"; exit 1; }
   exit 0
 fi
 
@@ -356,7 +369,7 @@ mkdir -p import && chmod 755 import
 if [ -d .output ]; then docker compose up -d --build; else docker compose pull && docker compose up -d; fi
 
 # 5b. Update-Dienst einrichten (Funktion steht oben)
-updater_einrichten
+updater_einrichten || say "    Update-Dienst nicht eingerichtet: $DIENST_GRUND" "    Update service not set up: $DIENST_GRUND"
 
 # 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain).
 #    Als Funktion: laeuft auch nach der Einrichtung ueber den Kurzzeit-Link (Schritt 9) mit der dort gewaehlten Domain.
