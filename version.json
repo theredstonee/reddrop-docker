@@ -1,18 +1,18 @@
 {
-  "version": "1.4.0",
-  "datum": "2026-10-24",
+  "version": "1.5.0",
+  "datum": "2026-10-26",
   "hinweise": {
     "de": [
-      "Bilder per URL anpassen: ?w=, h=, fit, format (auch AVIF/WebP automatisch) und q am Direktlink",
-      "Hotlink-Schutz: Einbinden nur auf erlaubten Websites",
-      "Pro: Traffic-Statistik und monatliche Grenzen pro Konto oder Rolle",
-      "Import aus Tiny File Manager — Dateien, Ordner und Konten"
+      "Import aus iCloud: Apple-Datenexport (Fotos + Drive), geteilte Alben und Drive-Links per Link, oder direkt mit Apple-ID (ganze Mediathek im Original)",
+      "HEIC-Fotos vom iPhone: Original bleibt, Vorschau, Direktlink und Galerie zeigen ein JPEG — GPS-Daten werden verlustfrei entfernt",
+      "Live Photos: das kurze Video hängt am Foto und spielt beim Drüberfahren",
+      "Live-Videos und JPEG-Ansichten wandern mit Sicherung, Papierkorb und S3-Umzug"
     ],
     "en": [
-      "Resize images via URL: ?w=, h=, fit, format (incl. automatic AVIF/WebP) and q on the direct link",
-      "Hotlink protection: embedding only on allowed websites",
-      "Pro: traffic statistics and monthly limits per account or role",
-      "Import from Tiny File Manager — files, folders and accounts"
+      "Import from iCloud: Apple data export (Photos + Drive), shared albums and Drive links, or directly with your Apple ID (whole library in original quality)",
+      "HEIC photos from iPhone: the original stays, preview, direct link and gallery show a JPEG — GPS data is removed losslessly",
+      "Live Photos: the short video is attached to the photo and plays on hover",
+      "Live videos and JPEG views move along with backups, trash and S3 migration"
     ]
   }
 }

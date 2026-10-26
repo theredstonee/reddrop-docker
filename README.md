@@ -4,7 +4,7 @@
 
 By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** für Teams und Firmen
 
-> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links — optionally end-to-end encrypted, as a gallery or as a paste with syntax highlighting. Passkeys, statistics, Discord/e-mail notifications, optional ClamAV virus scan, REST API with webhooks, automatic storage rules, CDN features (image resizing via URL, hotlink protection). Works with ShareX and Flameshot. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur, Google Photos or Tiny File Manager. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
+> **English:** Self-hosted file and media hosting. Upload screenshots, videos, music, documents and code and share them as links — optionally end-to-end encrypted, as a gallery or as a paste with syntax highlighting. Passkeys, statistics, Discord/e-mail notifications, optional ClamAV virus scan, REST API with webhooks, automatic storage rules, CDN features (image resizing via URL, hotlink protection). Works with ShareX and Flameshot. HEIC photos and Live Photos from the iPhone just work. Move over from Zipline, XBackBone, Chibisafe, ShareX, Imgur, Google Photos, iCloud (data export, shared links or Apple ID sign-in) or Tiny File Manager. One `docker compose up`, automatic HTTPS via Let's Encrypt. German and English. Jump to [Quick start](#schnellstart).
 
 ---
 
@@ -21,6 +21,7 @@ By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** f�
   - Video-Player mit Vorschau-Streifen beim Spulen und Audio-Player mit Wellenform
   - Vorschaubilder für alle Bilder und Videos
   - Bilder im Browser bearbeiten
+  - **iPhone-Fotos:** HEIC bleibt im Original, Vorschau, Direktlink und Galerie zeigen ein JPEG. **Live Photos** sind ein Eintrag — das kurze Video spielt beim Drüberfahren.
 - **Datenschutz:** Standort- und Kameradaten werden verlustfrei entfernt. Bilder lassen sich optional nach WebP oder AVIF umwandeln.
 - **Ordner und Tags**, auch verschachtelt. Dazu Favoriten, Suche, Sammelaktionen und ein **Papierkorb** (30 Tage).
 - **Statistik:** Aufrufe pro Tag, Herkunft (Discord, Reddit …) und Länder — gezählt ohne IP-Adressen.
@@ -33,7 +34,7 @@ By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** f�
   - **Hotlink-Schutz:** Direktlinks und Vorschaubilder nur auf erlaubten Websites einbinden; die eigene Domain ist immer erlaubt, Downloads bleiben offen.
 - **Speicher-Regeln:** alte oder lange nicht angesehene Dateien räumen sich von selbst auf — in den Papierkorb, endgültig oder (mit S3) ausgelagert. Mit Vorschau, wie viele Dateien eine Regel trifft.
 - **Datei-Anfragen:** Andere laden über einen Link Dateien zu dir hoch, auch ohne Konto.
-- **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur, Google Fotos (Takeout) und Tiny File Manager (Webordner samt Konten aus der `config.php`). Mit dabei sind:
+- **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur, Google Fotos (Takeout), iCloud (Fotos und Drive) und Tiny File Manager (Webordner samt Konten aus der `config.php`). Mit dabei sind:
   - Konten samt Passwörtern, Ordner und Tags
   - alte Linknamen; alte Pfade wie `/u/abc.png` leiten auf die neue Datei weiter
 - **Mehrere Konten** mit Speicher-Kontingent, Zwei-Faktor-Anmeldung mit Notfall-Codes und **Passkeys** (Fingerabdruck, Face ID, Sicherheitsschlüssel).
@@ -185,6 +186,12 @@ Seite **Import** im Panel. Es gibt drei Wege:
 - **Verbindung:** Adresse und API-Schlüssel der alten Instanz.
 - **Datei hochladen:** Export oder ZIP.
 - **Server-Ordner:** den alten Upload-Ordner nach `./import` kopieren (im Container `/import`, nur lesend).
+
+**iCloud** hat vier Wege:
+- **Apple-Export:** auf [privacy.apple.com](https://privacy.apple.com/) eine Kopie der Daten anfordern („iCloud Fotos“ und/oder „iCloud Drive“) und alle ZIP-Teile hochladen. Datum, Favoriten, Alben, ausgeblendete Fotos und Live Photos kommen mit.
+- **Link:** geteilte Alben (`icloud.com/sharedalbum/…`) und Freigaben einzelner Drive-Dateien. Ältere geteilte Alben enthalten bei Apple nur verkleinerte Fassungen.
+- **Apple-ID:** anmelden und den Code vom iPhone eingeben — dann kommt die ganze Fotos-Mediathek im Original (samt geteilter Mediathek und Alben) und auf Wunsch iCloud Drive. Das Passwort geht nur an Apple und wird nicht gespeichert; die Anmeldung gilt nur für diesen Import. Mit „Erweitertem Datenschutz“ muss am iPhone „Zugriff auf iCloud-Daten im Web“ eingeschaltet sein.
+- **Server-Ordner:** die Export-ZIPs nach `./import` legen.
 
 ## Pro einrichten
 
