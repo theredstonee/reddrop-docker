@@ -39,9 +39,10 @@ status() { # status laeuft|fertig|fehler "Meldung" — nur mit --status (Panel)
   [ -n "$STATUS" ] || return 0
   printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "$1" "$(date -Is)" "$(kurz "$2")" > "$STATUS" && chmod 644 "$STATUS"
 }
-# Live-Protokoll gibt es hier nicht (nur RedClub) — protokoll() ist ein Leerlauf
+# Vom Update-Dienst gestartet (--status): Live-Protokoll fuers Panel neben der Status-Datei (.update.log, je Lauf neu)
 LOG=""
-protokoll() { return 0; }
+if [ -n "$STATUS" ]; then LOG="$(dirname "$STATUS")/.update.log"; { : > "$LOG" && chmod 644 "$LOG"; } 2>/dev/null || LOG=""; fi
+protokoll() { [ -n "$LOG" ] && printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG"; return 0; }
 # Im Terminal: Schritte mit Nummer und ein Spinner mit laufenden Sekunden, damit man sieht, dass etwas passiert.
 # Die Docker-Ausgabe landet in einer Datei (letzte Zeile klein neben dem Spinner); bei einem Fehler erscheinen die
 # letzten 30 Zeilen rot. Ohne Terminal (Dienst, Umleitung in eine Datei) bleibt es bei einfachen Zeilen.
@@ -233,6 +234,7 @@ for i in $(seq 1 90); do
     unhealthy|exited|dead) break ;;
     running) [ "$i" -ge 15 ] && break ;;   # Image ohne Gesundheitspruefung: 30 s durchgelaufen reicht
   esac
+  [ $((i % 5)) -eq 0 ] && protokoll "    Selbsttest: $((i * 2)) s, Zustand ${zustand:-startet} …"
   warte_text "Selbsttest läuft — Zustand: ${zustand:-startet}" "Self-test running — state: ${zustand:-starting}"
   sleep 2
 done
