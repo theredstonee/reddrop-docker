@@ -20,11 +20,54 @@
 set -euo pipefail
 QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"   # RD_QUELLE nur fuer Tests
 DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile install.sh update.sh .env.example README.md version.json"
-# Ueber curl | bash gestartet (oder Dateien fehlen): alles nach /opt/reddrop holen und dort weitermachen
+# Unraid: ausser /boot (USB-Stick) und /mnt (Array/Cache) liegt alles im Arbeitsspeicher — nach einem Neustart waeren
+# Compose-Dateien und .env weg (die Datenbank im Docker-Volume bleibt, passt dann aber nicht mehr zu einer neuen .env).
+# Darum gehoert die Installation dort nach /mnt/user/appdata/<Ordnername>: gleicher Name → gleicher Compose-Projektname
+# → dieselben Volumes. unraid_ziel <ordner> gibt den dauerhaften Ordner aus, wenn <ordner> im Arbeitsspeicher liegt.
+unraid_ziel() {
+  [ -f /etc/unraid-version ] && [ -d /mnt/user ] || return 1
+  case "$1" in /mnt/*|/boot/*) return 1 ;; esac
+  printf '%s' "/mnt/user/appdata/$(basename "$1")"
+}
+# unraid_umziehen <alt> <neu> — Ordner kopieren, Dienst + Zeitplan auf den neuen Ordner umstellen, alten beiseitelegen.
+# Die laufenden Container bleiben, bis sie aus dem neuen Ordner neu gestartet werden (Update/Installation tun das).
+unraid_umziehen() {
+  local alt="$1" neu="$2" a f
+  [ -f "$alt/docker-compose.yml" ] || return 1
+  if [ -e "$neu" ] && [ -n "$(ls -A "$neu" 2>/dev/null)" ]; then return 1; fi
+  mkdir -p "$neu" && cp -a "$alt/." "$neu/" || { rm -rf "$neu"; return 1; }
+  a=$(printf '%s' "$alt" | sed 's/[][\.*^$#]/\\&/g')
+  for f in /usr/local/bin/reddrop-update /boot/config/plugins/reddrop/reddrop-update /boot/config/plugins/dynamix/reddrop-update.cron /etc/cron.d/root; do
+    [ -f "$f" ] && sed -i "s#\\([=\"' ]\\)$a\\([/\"';]\\|\$\\)#\\1$neu\\2#g" "$f"
+  done
+  if [ -x /usr/local/sbin/update_cron ]; then /usr/local/sbin/update_cron >/dev/null 2>&1 || true; fi
+  mv "$alt" "$alt.umgezogen-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+  return 0
+}
+UNRAID_ZIEL=""
+if [ -z "${RD_DIR:-}" ] && [ -f /etc/unraid-version ] && [ -d /mnt/user ]; then
+  UNRAID_ZIEL="/mnt/user/appdata/reddrop"
+  u_hier=""; if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then u_hier="$(cd "$(dirname "$0")" && pwd)"; fi
+  u_alt="${u_hier:-/opt/reddrop}"
+  if u_neu=$(unraid_ziel "$u_alt") && [ -f "$u_alt/docker-compose.yml" ]; then
+    if unraid_umziehen "$u_alt" "$u_neu"; then
+      echo "==> Unraid: $u_alt -> $u_neu (übersteht Neustarts / survives reboots)"
+      UNRAID_ZIEL="$u_neu"
+      if [ -n "$u_hier" ]; then
+        cd "$u_neu"
+        if { true </dev/tty; } 2>/dev/null; then exec bash ./install.sh "$@" </dev/tty; else exec bash ./install.sh "$@"; fi
+      fi
+    else
+      echo "==> Unraid: $u_alt liegt im Arbeitsspeicher, $u_neu ist schon belegt — bitte selbst umziehen / in RAM, $u_neu is taken — please move it yourself"
+      UNRAID_ZIEL=""
+    fi
+  fi
+fi
+# Ueber curl | bash gestartet (oder Dateien fehlen): alles nach /opt/reddrop (Unraid: /mnt/user/appdata/reddrop) holen und dort weitermachen
 if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then
   cd "$(dirname "$0")"
 else
-  ZIEL="${RD_DIR:-/opt/reddrop}"
+  ZIEL="${RD_DIR:-${UNRAID_ZIEL:-/opt/reddrop}}"
   echo "==> RedDrop: $ZIEL"
   mkdir -p "$ZIEL" && cd "$ZIEL"
   for f in $DATEIEN; do curl -fsSL -o "$f" "$QUELLE/$f" || { [ "$f" = "version.json" ] || { echo "ERROR: $f"; exit 1; }; }; done

@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/in
 ```
 
 Das Skript erledigt Folgendes:
-- legt alles nach **`/opt/reddrop`** (anderer Ordner: `curl … | sudo RD_DIR=/srv/reddrop bash`)
+- legt alles nach **`/opt/reddrop`** (anderer Ordner: `curl … | sudo RD_DIR=/srv/reddrop bash`; auf **Unraid** nach `/mnt/user/appdata/reddrop`, weil dort alles außerhalb von `/boot` und `/mnt` nach einem Neustart weg ist — eine bestehende Installation in `/opt` zieht beim nächsten Update von selbst um)
 - installiert Docker, falls nötig
 - erzeugt ein Datenbank-Passwort und startet alles
 - zeigt am Ende die Adresse und den **Setup-Code**

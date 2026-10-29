@@ -120,7 +120,7 @@ lauf() {
 for d in /usr/local/bin/reddrop-update /boot/config/plugins/reddrop/reddrop-update; do
   [ -z "$DIR" ] && [ -f "$d" ] && DIR=$(sed -n 's/^DIR="\([^"]*\)".*/\1/p' "$d" | head -1)
 done
-for k in "$DIR" /opt/reddrop "$PWD"; do
+for k in "$DIR" /mnt/user/appdata/reddrop /opt/reddrop "$PWD"; do
   if [ -n "$k" ] && [ -f "$k/docker-compose.yml" ] && [ -f "$k/.env" ]; then DIR="$k"; break; fi
 done
 if [ -z "$DIR" ] || [ ! -f "$DIR/.env" ] || [ ! -f "$DIR/docker-compose.yml" ]; then
@@ -128,6 +128,43 @@ if [ -z "$DIR" ] || [ ! -f "$DIR/.env" ] || [ ! -f "$DIR/docker-compose.yml" ]; 
           "No RedDrop installation found (looked in /opt/reddrop). Pass the folder with --dir — or install fresh: curl -fsSL $QUELLE/install.sh | sudo bash"
 fi
 cd "$DIR" || abbruch "Ordner $DIR nicht lesbar" "Cannot open $DIR"
+
+# Unraid: ausser /boot (USB-Stick) und /mnt (Array/Cache) liegt alles im Arbeitsspeicher — nach einem Neustart waeren
+# Compose-Dateien und .env weg (die Datenbank im Docker-Volume bleibt, passt dann aber nicht mehr zu einer neuen .env).
+# Darum gehoert die Installation dort nach /mnt/user/appdata/<Ordnername>: gleicher Name → gleicher Compose-Projektname
+# → dieselben Volumes. unraid_ziel <ordner> gibt den dauerhaften Ordner aus, wenn <ordner> im Arbeitsspeicher liegt.
+unraid_ziel() {
+  [ -f /etc/unraid-version ] && [ -d /mnt/user ] || return 1
+  case "$1" in /mnt/*|/boot/*) return 1 ;; esac
+  printf '%s' "/mnt/user/appdata/$(basename "$1")"
+}
+# unraid_umziehen <alt> <neu> — Ordner kopieren, Dienst + Zeitplan auf den neuen Ordner umstellen, alten beiseitelegen.
+# Die laufenden Container bleiben, bis sie aus dem neuen Ordner neu gestartet werden (Update/Installation tun das).
+unraid_umziehen() {
+  local alt="$1" neu="$2" a f
+  [ -f "$alt/docker-compose.yml" ] || return 1
+  if [ -e "$neu" ] && [ -n "$(ls -A "$neu" 2>/dev/null)" ]; then return 1; fi
+  mkdir -p "$neu" && cp -a "$alt/." "$neu/" || { rm -rf "$neu"; return 1; }
+  a=$(printf '%s' "$alt" | sed 's/[][\.*^$#]/\\&/g')
+  for f in /usr/local/bin/reddrop-update /boot/config/plugins/reddrop/reddrop-update /boot/config/plugins/dynamix/reddrop-update.cron /etc/cron.d/root; do
+    [ -f "$f" ] && sed -i "s#\\([=\"' ]\\)$a\\([/\"';]\\|\$\\)#\\1$neu\\2#g" "$f"
+  done
+  if [ -x /usr/local/sbin/update_cron ]; then /usr/local/sbin/update_cron >/dev/null 2>&1 || true; fi
+  mv "$alt" "$alt.umgezogen-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+  return 0
+}
+# Liegt die Installation noch im Arbeitsspeicher: jetzt umziehen (Schritt 2 startet die Container von dort neu)
+if unraid_neu=$(unraid_ziel "$DIR"); then
+  unraid_alt="$DIR"
+  if unraid_umziehen "$unraid_alt" "$unraid_neu"; then
+    DIR="$unraid_neu"; cd "$DIR" || abbruch "Ordner $DIR nicht lesbar" "Cannot open $DIR"
+    case "$STATUS" in "$unraid_alt"/*) STATUS="$DIR${STATUS#"$unraid_alt"}" ;; esac
+    case "${LOG:-}" in "$unraid_alt"/*) LOG="$DIR${LOG#"$unraid_alt"}" ;; esac
+    info "Unraid: Installation nach $DIR umgezogen — übersteht jetzt Neustarts (alter Ordner: $unraid_alt.umgezogen-…)" "Unraid: installation moved to $DIR — now survives reboots (old folder: $unraid_alt.umgezogen-…)"
+  else
+    info "${Y}Unraid: $unraid_alt liegt im Arbeitsspeicher (nach einem Neustart weg), der Umzug nach $unraid_neu ging nicht — dort liegt schon etwas.${N}" "${Y}Unraid: $unraid_alt lives in RAM (gone after a reboot), moving to $unraid_neu failed — something is already there.${N}"
+  fi
+fi
 l=$(sed -n 's/^RD_LANG=//p' .env | tail -1); [ "$l" = "en" ] && SPR="en"
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || abbruch "Docker mit „docker compose“ fehlt auf diesem Server." "Docker with “docker compose” is missing on this server."
 alt=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1)
