@@ -44,15 +44,50 @@ unraid_umziehen() {
   mv "$alt" "$alt.umgezogen-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
   return 0
 }
+# inst_suchen — vorhandene RedDrop-Installation(en) finden, auch mit anderem Ordnernamen oder an ungewoehnlichem Ort.
+# Docker Compose merkt sich den Ordner jeder Installation im Container-Label. Vorrang: laufende Installationen, dann
+# gestoppte, erst danach Ordner auf der Platte mit einer docker-compose.yml fuer unser Image. Ein Ordner pro Zeile.
+inst_ordner() { # inst_ordner <docker-ps-Schalter …> — Ordner der passenden App-Container
+  local c d img
+  command -v docker >/dev/null 2>&1 || return 0
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    img=$(docker inspect -f '{{.Config.Image}}' "$c" 2>/dev/null || true)
+    case "$img" in *theredstonee/reddrop:*|*theredstonee/reddrop) ;; *) continue ;; esac
+    d=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$c" 2>/dev/null || true)
+    [ -n "$d" ] && [ -f "$d/docker-compose.yml" ] && [ -f "$d/.env" ] && printf '%s\n' "$d"
+  done < <(docker ps "$@" -q --filter label=com.docker.compose.service=app 2>/dev/null)
+}
+inst_suchen() {
+  local f d t
+  t=$(inst_ordner | awk 'NF && !s[$0]++'); [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
+  t=$(inst_ordner -a | awk 'NF && !s[$0]++'); [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
+  while IFS= read -r f; do
+    case "$f" in */.sicherung/*|*.umgezogen-*|*/.trash*) continue ;; esac
+    grep -q 'theredstonee/reddrop:' "$f" 2>/dev/null || continue
+    grep -q 'theredstonee/redclub:' "$f" 2>/dev/null && continue   # RedClub mit eingebautem RedDrop
+    d=$(dirname "$f"); [ -f "$d/.env" ] && printf '%s\n' "$d"
+  done < <(find /opt /srv /root /home /mnt/user/appdata /mnt/cache/appdata /docker /data -maxdepth 3 -name docker-compose.yml 2>/dev/null) | awk 'NF && !s[$0]++'
+}
+GEFUNDEN=""
+if [ -z "${RD_DIR:-}" ] && ! { [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; }; then
+  g_alle=$(inst_suchen 2>/dev/null || true)
+  case "$(printf '%s\n' "$g_alle" | grep -c . || true)" in
+    0) ;;
+    1) GEFUNDEN="$g_alle"; echo "==> RedDrop: vorhandene Installation gefunden / existing installation found: $GEFUNDEN" ;;
+    *) echo "==> Mehrere RedDrop-Installationen gefunden / several installations found:"; printf '      %s\n' $g_alle
+       echo "    Bitte die richtige waehlen / please pick one: curl -fsSL $QUELLE/install.sh | sudo RD_DIR=/pfad bash"; exit 1 ;;
+  esac
+fi
 UNRAID_ZIEL=""
 if [ -z "${RD_DIR:-}" ] && [ -f /etc/unraid-version ] && [ -d /mnt/user ]; then
   UNRAID_ZIEL="/mnt/user/appdata/reddrop"
   u_hier=""; if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then u_hier="$(cd "$(dirname "$0")" && pwd)"; fi
-  u_alt="${u_hier:-/opt/reddrop}"
+  u_alt="${u_hier:-${GEFUNDEN:-/opt/reddrop}}"
   if u_neu=$(unraid_ziel "$u_alt") && [ -f "$u_alt/docker-compose.yml" ]; then
     if unraid_umziehen "$u_alt" "$u_neu"; then
       echo "==> Unraid: $u_alt -> $u_neu (übersteht Neustarts / survives reboots)"
-      UNRAID_ZIEL="$u_neu"
+      UNRAID_ZIEL="$u_neu"; [ -n "$GEFUNDEN" ] && GEFUNDEN="$u_neu"
       if [ -n "$u_hier" ]; then
         cd "$u_neu"
         if { true </dev/tty; } 2>/dev/null; then exec bash ./install.sh "$@" </dev/tty; else exec bash ./install.sh "$@"; fi
@@ -67,7 +102,7 @@ fi
 if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then
   cd "$(dirname "$0")"
 else
-  ZIEL="${RD_DIR:-${UNRAID_ZIEL:-/opt/reddrop}}"
+  ZIEL="${RD_DIR:-${GEFUNDEN:-${UNRAID_ZIEL:-/opt/reddrop}}}"
   echo "==> RedDrop: $ZIEL"
   mkdir -p "$ZIEL" && cd "$ZIEL"
   for f in $DATEIEN; do curl -fsSL -o "$f" "$QUELLE/$f" || { [ "$f" = "version.json" ] || { echo "ERROR: $f"; exit 1; }; }; done

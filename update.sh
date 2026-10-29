@@ -123,9 +123,43 @@ done
 for k in "$DIR" /mnt/user/appdata/reddrop /opt/reddrop "$PWD"; do
   if [ -n "$k" ] && [ -f "$k/docker-compose.yml" ] && [ -f "$k/.env" ]; then DIR="$k"; break; fi
 done
+# inst_suchen — vorhandene RedDrop-Installation(en) finden, auch mit anderem Ordnernamen oder an ungewoehnlichem Ort.
+# Docker Compose merkt sich den Ordner jeder Installation im Container-Label. Vorrang: laufende Installationen, dann
+# gestoppte, erst danach Ordner auf der Platte mit einer docker-compose.yml fuer unser Image. Ein Ordner pro Zeile.
+inst_ordner() { # inst_ordner <docker-ps-Schalter …> — Ordner der passenden App-Container
+  local c d img
+  command -v docker >/dev/null 2>&1 || return 0
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    img=$(docker inspect -f '{{.Config.Image}}' "$c" 2>/dev/null || true)
+    case "$img" in *theredstonee/reddrop:*|*theredstonee/reddrop) ;; *) continue ;; esac
+    d=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$c" 2>/dev/null || true)
+    [ -n "$d" ] && [ -f "$d/docker-compose.yml" ] && [ -f "$d/.env" ] && printf '%s\n' "$d"
+  done < <(docker ps "$@" -q --filter label=com.docker.compose.service=app 2>/dev/null)
+}
+inst_suchen() {
+  local f d t
+  t=$(inst_ordner | awk 'NF && !s[$0]++'); [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
+  t=$(inst_ordner -a | awk 'NF && !s[$0]++'); [ -n "$t" ] && { printf '%s\n' "$t"; return 0; }
+  while IFS= read -r f; do
+    case "$f" in */.sicherung/*|*.umgezogen-*|*/.trash*) continue ;; esac
+    grep -q 'theredstonee/reddrop:' "$f" 2>/dev/null || continue
+    grep -q 'theredstonee/redclub:' "$f" 2>/dev/null && continue   # RedClub mit eingebautem RedDrop
+    d=$(dirname "$f"); [ -f "$d/.env" ] && printf '%s\n' "$d"
+  done < <(find /opt /srv /root /home /mnt/user/appdata /mnt/cache/appdata /docker /data -maxdepth 3 -name docker-compose.yml 2>/dev/null) | awk 'NF && !s[$0]++'
+}
+# Nicht an den ueblichen Orten: ueberall suchen (anderer Ordnername, /root, /home, Unraid-appdata …)
 if [ -z "$DIR" ] || [ ! -f "$DIR/.env" ] || [ ! -f "$DIR/docker-compose.yml" ]; then
-  abbruch "Keine RedDrop-Installation gefunden (gesucht in /opt/reddrop). Ordner mit --dir angeben — oder neu installieren: curl -fsSL $QUELLE/install.sh | sudo bash" \
-          "No RedDrop installation found (looked in /opt/reddrop). Pass the folder with --dir — or install fresh: curl -fsSL $QUELLE/install.sh | sudo bash"
+  gefunden=$(inst_suchen); anzahl=$(printf '%s\n' "$gefunden" | grep -c . || true)
+  if [ "$anzahl" = 1 ]; then DIR="$gefunden"
+  elif [ "$anzahl" -gt 1 ]; then
+    abbruch "Mehrere RedDrop-Installationen gefunden: $(printf '%s\n' "$gefunden" | paste -sd' ') — bitte die richtige mit --dir angeben" \
+            "Several RedDrop installations found: $(printf '%s\n' "$gefunden" | paste -sd' ') — please pick one with --dir"
+  fi
+fi
+if [ -z "$DIR" ] || [ ! -f "$DIR/.env" ] || [ ! -f "$DIR/docker-compose.yml" ]; then
+  abbruch "Keine RedDrop-Installation gefunden (Container und Ordner wie /opt, /srv, /root, /home, appdata durchsucht). Ordner mit --dir angeben — oder neu installieren: curl -fsSL $QUELLE/install.sh | sudo bash" \
+          "No RedDrop installation found (searched containers and folders like /opt, /srv, /root, /home, appdata). Pass the folder with --dir — or install fresh: curl -fsSL $QUELLE/install.sh | sudo bash"
 fi
 cd "$DIR" || abbruch "Ordner $DIR nicht lesbar" "Cannot open $DIR"
 
