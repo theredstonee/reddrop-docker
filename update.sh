@@ -183,6 +183,8 @@ if [ -n "$frei" ] && [ "$frei" -lt 1024 ]; then
 fi
 info "Freier Platz: ${frei:-?} MB" "Free space: ${frei:-?} MB"
 mkdir -p "$sich" && chmod 700 .sicherung
+# .env mitsichern (nur lesbar fuer root) — daraus kann ein spaeterer Lauf den Weg nach aussen zurueckholen
+cp -p .env "$sich/.env" 2>/dev/null && chmod 600 "$sich/.env" || true
 if [ -n "$(docker compose ps -q db 2>/dev/null)" ]; then
   # pg_dump im Datenbank-Container (Benutzer/Name aus dessen Umgebung) — gepackt, nur fuer root lesbar
   warte "Datenbank wird gesichert" "Backing up the database"
@@ -260,6 +262,42 @@ db_passwort_angleichen() {
   docker compose restart app >/dev/null 2>&1 || true
   return 2
 }
+
+# Weg nach aussen sichern: kennt die .env keinen (z. B. nach einer abgebrochenen Einrichtung), wuerde ein Neustart den
+# freigegebenen Port bzw. Caddy verlieren — dann vom laufenden Container uebernehmen, sonst aus der letzten Sicherung.
+weg_retten() {
+  WEG_GERETTET=""
+  if grep -q '^COMPOSE_FILE=' .env 2>/dev/null; then return 0; fi
+  local proj c port ip alt
+  proj=$(basename "$PWD")
+  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=caddy 2>/dev/null || true)
+  if [ -n "$c" ]; then
+    echo "COMPOSE_FILE=docker-compose.yml:compose.caddy.yml" >> .env; WEG_GERETTET="Caddy"; return 0
+  fi
+  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=app 2>/dev/null || true)
+  c=${c%%$'\n'*}
+  port=""; ip=""
+  if [ -n "$c" ]; then
+    port=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostPort}}{{end}}' "$c" 2>/dev/null || true)
+    ip=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostIp}}{{end}}' "$c" 2>/dev/null || true)
+  fi
+  if [ -n "$port" ]; then
+    # leere HostIp heisst: auf allen Adressen (so war es bisher erreichbar)
+    printf 'COMPOSE_FILE=docker-compose.yml:compose.port.yml\nRD_PORT=%s\nRD_BIND=%s\n' "$port" "${ip:-0.0.0.0}" >> .env
+    WEG_GERETTET="Port ${ip:-0.0.0.0}:$port"; return 0
+  fi
+  for alt in $(ls -1d .sicherung/*/ 2>/dev/null | sort -r); do
+    if grep -q '^COMPOSE_FILE=' "${alt}.env" 2>/dev/null; then
+      grep -E '^(COMPOSE_FILE|RD_PORT|RD_BIND|RD_PROXY_DOMAIN)=' "${alt}.env" >> .env || true
+      WEG_GERETTET="Sicherung ${alt%/}"; return 0
+    fi
+  done
+  return 0
+}
+
+weg_retten
+if [ -n "$WEG_GERETTET" ]; then info "${Y}Die .env kannte keinen Weg nach außen — übernommen ($WEG_GERETTET), damit der Neustart RedDrop nicht unerreichbar macht.${N}" "${Y}.env had no way in from outside — taken over ($WEG_GERETTET) so the restart does not make RedDrop unreachable.${N}"
+elif ! grep -q '^COMPOSE_FILE=' .env && ! grep -q '^COMPOSE_PROFILES=.*tunnel' .env; then info "${Y}Achtung: Die .env kennt keinen Weg nach außen (kein Port, kein Caddy, kein Tunnel) — RedDrop ist danach nur intern erreichbar. Beheben: install.sh erneut ausführen.${N}" "${Y}Warning: .env knows no way in (no port, Caddy or tunnel) — RedDrop is only reachable internally afterwards. Fix: run install.sh again.${N}"; fi
 
 # 2. Neues Image laden und neu starten (alle Dienste der .env: App, Datenbank, Caddy, Tunnel …)
 schritt "Neues Image laden und neu starten" "Pulling the new image and restarting"

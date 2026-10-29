@@ -364,6 +364,23 @@ if [ "$ram_mb" -lt 1500 ] && [ "$(swapon --noheadings 2>/dev/null | wc -l)" -eq 
 fi
 
 # 3. .env: Datenbank-Passwort nur beim ersten Mal (sonst passt es nicht mehr zur Datenbank)
+# 3a. .env fehlt, aber die Container dieser Installation gibt es noch (z. B. Unraid nach einem Neustart: Ordner im RAM weg,
+#     Docker-Volumes noch da): Datenbank-Passwort von dort — ein neu gewuerfeltes passte nicht mehr zur Datenbank.
+#     Eine NEU angelegte .env wird bei einem Abbruch (Strg+C) vor Schritt 4 wieder entfernt — sonst fehlte spaeter der Weg nach aussen.
+ENV_NEU=0; WEG_FERTIG=0
+if [ ! -f .env ]; then
+  env_db=$(docker ps -aq --filter "label=com.docker.compose.project=$(basename "$PWD")" --filter label=com.docker.compose.service=db 2>/dev/null || true)
+  env_db=${env_db%%$'\n'*}
+  env_pw=""
+  [ -n "$env_db" ] && env_pw=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$env_db" 2>/dev/null | sed -n 's/^POSTGRES_PASSWORD=//p' || true)
+  if [ -n "$env_pw" ]; then
+    printf 'DB_PASSWORD=%s\nTZ=Europe/Berlin\n' "$env_pw" > .env && chmod 600 .env
+    say "==> .env fehlte — Datenbank-Passwort aus dem vorhandenen Datenbank-Container übernommen" "==> .env was missing — database password taken from the existing database container"
+  else
+    ENV_NEU=1
+  fi
+fi
+trap 'if [ "${ENV_NEU:-0}" = 1 ] && [ "${WEG_FERTIG:-0}" != 1 ]; then rm -f "$PWD/.env"; fi' EXIT
 if [ ! -f .env ]; then
   printf 'DB_PASSWORD=%s\nTZ=Europe/Berlin\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > .env
   chmod 600 .env
@@ -371,6 +388,40 @@ if [ ! -f .env ]; then
 fi
 # Sprache merken — gilt auch fuer den Einrichtungs-Assistenten
 if grep -q '^RD_LANG=' .env; then sed -i "s/^RD_LANG=.*/RD_LANG=$SPR/" .env; else echo "RD_LANG=$SPR" >> .env; fi
+
+# Weg nach aussen sichern: kennt die .env keinen (z. B. nach einer abgebrochenen Einrichtung), wuerde ein Neustart den
+# freigegebenen Port bzw. Caddy verlieren — dann vom laufenden Container uebernehmen, sonst aus der letzten Sicherung.
+weg_retten() {
+  WEG_GERETTET=""
+  if grep -q '^COMPOSE_FILE=' .env 2>/dev/null; then return 0; fi
+  local proj c port ip alt
+  proj=$(basename "$PWD")
+  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=caddy 2>/dev/null || true)
+  if [ -n "$c" ]; then
+    echo "COMPOSE_FILE=docker-compose.yml:compose.caddy.yml" >> .env; WEG_GERETTET="Caddy"; return 0
+  fi
+  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=app 2>/dev/null || true)
+  c=${c%%$'\n'*}
+  port=""; ip=""
+  if [ -n "$c" ]; then
+    port=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostPort}}{{end}}' "$c" 2>/dev/null || true)
+    ip=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostIp}}{{end}}' "$c" 2>/dev/null || true)
+  fi
+  if [ -n "$port" ]; then
+    # leere HostIp heisst: auf allen Adressen (so war es bisher erreichbar)
+    printf 'COMPOSE_FILE=docker-compose.yml:compose.port.yml\nRD_PORT=%s\nRD_BIND=%s\n' "$port" "${ip:-0.0.0.0}" >> .env
+    WEG_GERETTET="Port ${ip:-0.0.0.0}:$port"; return 0
+  fi
+  for alt in $(ls -1d .sicherung/*/ 2>/dev/null | sort -r); do
+    if grep -q '^COMPOSE_FILE=' "${alt}.env" 2>/dev/null; then
+      grep -E '^(COMPOSE_FILE|RD_PORT|RD_BIND|RD_PROXY_DOMAIN)=' "${alt}.env" >> .env || true
+      WEG_GERETTET="Sicherung ${alt%/}"; return 0
+    fi
+  done
+  return 0
+}
+weg_retten
+[ -n "$WEG_GERETTET" ] && say "==> Die .env kannte keinen Weg nach außen — vom laufenden RedDrop übernommen ($WEG_GERETTET)" "==> .env had no way in — taken over from the running RedDrop ($WEG_GERETTET)"
 
 # 4. Weg nach aussen festlegen — nur, solange die .env noch keinen kennt
 if ! grep -q '^COMPOSE_FILE=' .env; then
@@ -412,6 +463,7 @@ if ! grep -q '^COMPOSE_FILE=' .env; then
     say "==> Caddy uebernimmt Port 80/443 und holt das Zertifikat selbst" "==> Caddy takes port 80/443 and gets the certificate by itself"
   fi
 fi
+WEG_FERTIG=1
 # 4b. Virenscan (ClamAV als eigener Container) — einmal fragen, danach im Panel umschaltbar
 profil_setzen() { # profil_setzen an|aus  → COMPOSE_PROFILES in der .env um "virenscan" ergaenzen/kuerzen
   local p; p=$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
