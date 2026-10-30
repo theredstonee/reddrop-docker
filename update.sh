@@ -126,6 +126,14 @@ done
 # inst_suchen — vorhandene RedDrop-Installation(en) finden, auch mit anderem Ordnernamen oder an ungewoehnlichem Ort.
 # Docker Compose merkt sich den Ordner jeder Installation im Container-Label. Vorrang: laufende Installationen, dann
 # gestoppte, erst danach Ordner auf der Platte mit einer docker-compose.yml fuer unser Image. Ein Ordner pro Zeile.
+inst_echt() { # inst_echt <ordner> — nur Ordner, deren COMPOSE_FILE ausschliesslich mitgelieferte Dateien nennt (Test-/Eigenbau-Umgebungen nie uebernehmen)
+  local cf x
+  cf=$(sed -n 's/^COMPOSE_FILE=//p' "$1/.env" 2>/dev/null | tail -1 | tr -d '"'"'"'\r')
+  [ -n "$cf" ] || return 0
+  for x in $(printf '%s' "$cf" | tr ':' ' '); do
+    case "$x" in docker-compose.yml|compose.caddy.yml|compose.port.yml|compose.node.yml) ;; *) return 1 ;; esac
+  done
+}
 inst_ordner() { # inst_ordner <docker-ps-Schalter …> — Ordner der passenden App-Container
   local c d img
   command -v docker >/dev/null 2>&1 || return 0
@@ -134,7 +142,7 @@ inst_ordner() { # inst_ordner <docker-ps-Schalter …> — Ordner der passenden 
     img=$(docker inspect -f '{{.Config.Image}}' "$c" 2>/dev/null || true)
     case "$img" in *theredstonee/reddrop:*|*theredstonee/reddrop) ;; *) continue ;; esac
     d=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$c" 2>/dev/null || true)
-    [ -n "$d" ] && [ -f "$d/docker-compose.yml" ] && [ -f "$d/.env" ] && printf '%s\n' "$d"
+    [ -n "$d" ] && [ -f "$d/docker-compose.yml" ] && [ -f "$d/.env" ] && inst_echt "$d" && printf '%s\n' "$d"
   done < <(docker ps "$@" -q --filter label=com.docker.compose.service=app 2>/dev/null)
 }
 inst_suchen() {
@@ -145,7 +153,7 @@ inst_suchen() {
     case "$f" in */.sicherung/*|*.umgezogen-*|*/.trash*) continue ;; esac
     grep -q 'theredstonee/reddrop:' "$f" 2>/dev/null || continue
     grep -q 'theredstonee/redclub:' "$f" 2>/dev/null && continue   # RedClub mit eingebautem RedDrop
-    d=$(dirname "$f"); [ -f "$d/.env" ] && printf '%s\n' "$d"
+    d=$(dirname "$f"); [ -f "$d/.env" ] && inst_echt "$d" && printf '%s\n' "$d"
   done < <(find /opt /srv /root /home /mnt/user/appdata /mnt/cache/appdata /docker /data -maxdepth 3 -name docker-compose.yml 2>/dev/null) | awk 'NF && !s[$0]++'
 }
 # Nicht an den ueblichen Orten: ueberall suchen (anderer Ordnername, /root, /home, Unraid-appdata …)
