@@ -1,20 +1,14 @@
 {
-  "version": "1.5.2",
-  "datum": "2026-10-29",
+  "version": "1.5.3",
+  "datum": "2026-10-31",
   "hinweise": {
     "de": [
-      "Neu: Live-Protokoll beim Update im Panel — du siehst, was der Server gerade macht (Image laden, Neustart, Selbsttest)",
-      "Schlägt ein Update fehl oder holt der Server es nicht ab, bleibt der Fehler samt Protokoll im Fenster stehen, mit dem Befehl zum Beheben",
-      "update.sh zeigt Schritte mit Nummer, einen Spinner mit laufenden Sekunden und bei Fehlern die letzten Zeilen der Ausgabe in Rot",
-      "Behoben: Der Rücksprung auf die vorherige Fassung nach einem fehlgeschlagenen Selbsttest klappt jetzt auch mit neueren Docker-Versionen (containerd-Speicher)",
-      "Behoben: Bei der Installation per curl | sudo bash erschien am Ende „curl: (23) Failure writing output“, obwohl alles geklappt hatte"
+      "Wichtige Fehlerbehebung: RedDrop konnte nach längerer Laufzeit komplett hängen bleiben (Fehler 504 über Proxy oder Tunnel), bis zum Neustart. Ursache waren gleichzeitig laufende Hintergrund-Aufgaben, die sich gegenseitig die Datenbank-Verbindungen blockierten — jetzt behoben.",
+      "Wartet eine Anfrage zu lange auf die Datenbank, bekommt sie jetzt nach 20 Sekunden eine Fehlermeldung, statt endlos zu hängen"
     ],
     "en": [
-      "New: live log during updates in the panel — you see what the server is doing (pulling the image, restart, self-test)",
-      "If an update fails or the server does not pick it up, the error stays in the window with the log and the command to fix it",
-      "update.sh shows numbered steps, a spinner with running seconds and, on errors, the last lines of output in red",
-      "Fixed: rolling back to the previous version after a failed self-test now also works with newer Docker versions (containerd store)",
-      "Fixed: installing via curl | sudo bash no longer ends with “curl: (23) Failure writing output” although everything worked"
+      "Important fix: after running for a while RedDrop could hang completely (error 504 via proxy or tunnel) until restarted. Background tasks running at the same time blocked each other’s database connections — fixed now.",
+      "A request that waits too long for the database now gets an error after 20 seconds instead of hanging forever"
     ]
   }
 }
