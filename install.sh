@@ -12,6 +12,8 @@
 #
 # Schalter (optional):  --lang en|de  --port 8080  --domain drop.firma.de  --email du@firma.de
 #                       --caddy (Caddy erzwingen)  --no-vhost (keinen Virtual Host anlegen)
+#                       --webserver=nginx|apache|keiner (kein nginx/Apache da: diesen ohne Frage installieren,
+#                         samt Virtual Host + HTTPS per certbot; ohne Terminal und ohne Schalter nur die Vorlage)
 #                       --virenscan / --no-virenscan (ClamAV mitstarten, ~1,5 GB RAM; sonst fragt er)
 #                       --uninstall / --deinstallieren (Container, Webserver-Eintraege, auf Wunsch alle Daten)
 # Ein zweiter Aufruf aktualisiert nur (Image ziehen, neu starten) und fragt nichts mehr.
@@ -121,7 +123,7 @@ else
   if { true </dev/tty; } 2>/dev/null; then exec bash ./install.sh "$@" </dev/tty; else exec bash ./install.sh "$@"; fi
 fi
 
-PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"; WEG=""; SPR=""; VS=""; NUR_DIENST=""
+PORT=""; DOMAIN=""; EMAIL=""; MODUS=""; VHOST="ja"; WS_WAHL=""; WEG=""; SPR=""; VS=""; NUR_DIENST=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --lang) SPR="${2,,}"; shift 2 ;;
@@ -130,6 +132,10 @@ while [ $# -gt 0 ]; do
     --email) EMAIL="$2"; shift 2 ;;
     --caddy) MODUS="caddy"; shift ;;
     --no-vhost) VHOST="nein"; shift ;;
+    --webserver|--webserver=*)   # kein nginx/Apache da: diesen installieren (ohne Frage)
+      if [ "$1" = "--webserver" ]; then WS_WAHL="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); else WS_WAHL="${1#*=}"; shift; fi
+      WS_WAHL="${WS_WAHL,,}"
+      case "$WS_WAHL" in nginx|apache|apache2|httpd|keiner|none) ;; *) echo "--webserver: nginx | apache | keiner (none)"; exit 1 ;; esac ;;
     --dienst) NUR_DIENST="ja"; shift ;;   # nur den Update-Dienst neu einrichten (ruft update.sh auf)
     --virenscan) VS="ja"; shift ;;
     --no-virenscan) VS="nein"; shift ;;
@@ -246,13 +252,15 @@ if [ -n "$WEG" ]; then
   stempel=$(date +%Y%m%d-%H%M%S); neu_laden=""
   for datei in /etc/nginx/sites-enabled/reddrop.conf /etc/nginx/sites-enabled/reddrop-setup.conf /etc/nginx/sites-available/reddrop.conf /etc/nginx/sites-available/reddrop-setup.conf \
                /etc/nginx/conf.d/reddrop.conf /etc/nginx/conf.d/reddrop-setup.conf /etc/apache2/sites-enabled/reddrop.conf /etc/apache2/sites-enabled/reddrop-setup.conf \
-               /etc/apache2/sites-available/reddrop.conf /etc/apache2/sites-available/reddrop-setup.conf /etc/httpd/conf.d/reddrop.conf /etc/httpd/conf.d/reddrop-setup.conf; do
+               /etc/apache2/sites-available/reddrop.conf /etc/apache2/sites-available/reddrop-setup.conf /etc/httpd/conf.d/reddrop.conf /etc/httpd/conf.d/reddrop-setup.conf \
+               /etc/apache2/sites-enabled/reddrop-le-ssl.conf /etc/apache2/sites-available/reddrop-le-ssl.conf /etc/httpd/conf.d/reddrop-le-ssl.conf; do
     if [ -L "$datei" ]; then rm -f "$datei"; neu_laden="ja"
     elif [ -f "$datei" ]; then mkdir -p /root/reddrop-backup && cp -a "$datei" "/root/reddrop-backup/$(basename "$datei").bak-$stempel" && rm -f "$datei"; neu_laden="ja"; fi
   done
   if [ -n "$neu_laden" ]; then
     if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then systemctl reload nginx 2>/dev/null || nginx -s reload; fi
-    if command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest >/dev/null 2>&1; then systemctl reload apache2; fi
+    if command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest >/dev/null 2>&1; then systemctl reload apache2 2>/dev/null || apache2ctl graceful || true; fi
+    if ! command -v apache2ctl >/dev/null 2>&1 && command -v httpd >/dev/null 2>&1 && httpd -t >/dev/null 2>&1; then systemctl reload httpd 2>/dev/null || httpd -k graceful || true; fi
     say "==> Webserver-Eintraege entfernt (Sicherung in /root/reddrop-backup)." "==> Web server entries removed (backup in /root/reddrop-backup)."
   fi
   dom=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env 2>/dev/null | tail -1 || true)
@@ -565,6 +573,123 @@ updater_einrichten || say "    Update-Dienst nicht eingerichtet: $DIENST_GRUND" 
 
 # 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain).
 #    Als Funktion: laeuft auch nach der Einrichtung ueber den Kurzzeit-Link (Schritt 9) mit der dort gewaehlten Domain.
+# Webserver selbst einrichten: Kein nginx/Apache auf dem Server (Port-Modus mit Domain) — auf Wunsch einen installieren
+#   (Frage: 1 nginx, 2 Apache, 3 keinen; oder --webserver nginx|apache). Danach geht es unten im normalen Weg weiter:
+#   Virtual Host anlegen, Konfigtest, Neuladen, Zertifikat per certbot. Ohne Terminal und ohne Schalter: nur die Vorlage.
+ws_neu=""
+ws_paket() { # ws_paket <paket …> — ueber apt-get bzw. dnf/yum installieren; Ausgabe ins Protokoll, solange ein Spinner
+  local log pid n=0 rc=0 txt
+  txt="$(s "Installiere" "Installing") $*"
+  log=$(mktemp "/tmp/reddrop-pakete.XXXXXX") || return 1
+  if command -v apt-get >/dev/null 2>&1; then
+    ( export DEBIAN_FRONTEND=noninteractive
+      apt-get -o DPkg::Lock::Timeout=300 update -qq && apt-get -o DPkg::Lock::Timeout=300 install -y -qq "$@" ) >"$log" 2>&1 &
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y -q "$@" >"$log" 2>&1 &
+  elif command -v yum >/dev/null 2>&1; then yum install -y -q "$@" >"$log" 2>&1 &
+  else rm -f "$log"; return 1; fi
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ -t 1 ]; then printf '\r  %s%s%s %s (%s s)' "$R" "${SPIN[$(( n % ${#SPIN[@]} ))]}" "$N" "$txt" "$(( n / 4 ))"; fi
+    n=$((n + 1)); sleep 0.25
+  done
+  wait "$pid" || rc=$?
+  if [ -t 1 ]; then printf '\r\033[K'; fi
+  if [ "$rc" = 0 ]; then say "    Installiert: $*" "    Installed: $*"
+  else say "    FEHLER: $* liess sich nicht installieren (Ausgabe unten)." "    ERROR: $* could not be installed (output below)."; tail -n 12 "$log" | sed 's/^/      /'; fi
+  rm -f "$log"
+  return "$rc"
+}
+ws_starten() { # ws_starten nginx|apache2|httpd — einschalten (startet mit dem Server) und starten; ohne systemd direkt
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl enable "$1" >/dev/null 2>&1 || true
+    systemctl restart "$1" >/dev/null 2>&1 || return 1
+  else
+    case "$1" in
+      nginx) nginx -s reload >/dev/null 2>&1 || nginx || return 1 ;;
+      apache2) apache2ctl start >/dev/null 2>&1 || return 1 ;;
+      # RHEL & Co.: das Platzhalter-Zertifikat von mod_ssl legt sonst httpd-init.service (systemd) an
+      httpd) if [ ! -s /etc/pki/tls/certs/localhost.crt ] && [ -x /usr/libexec/httpd-ssl-gencerts ]; then /usr/libexec/httpd-ssl-gencerts >/dev/null 2>&1 || true; fi
+        httpd -k start >/dev/null 2>&1 || return 1 ;;
+    esac
+  fi
+}
+ws_anbieten() { # fragen (oder --webserver), installieren, starten — setzt webserver und ws_neu; Rueckgabe 1 = Vorlage
+  local wahl="$WS_WAHL" dienst wer=""
+  local -a pakete
+  case "$wahl" in keiner|none) return 1 ;; esac
+  if ! command -v apt-get >/dev/null 2>&1 && ! command -v dnf >/dev/null 2>&1 && ! command -v yum >/dev/null 2>&1; then
+    [ -z "$wahl" ] || say "    $wahl laesst sich hier nicht installieren (weder apt-get noch dnf/yum gefunden)." "    $wahl cannot be installed here (neither apt-get nor dnf/yum found)."
+    return 1
+  fi
+  # Port 80/443 belegt (anderer Proxy, Container …): ein zusaetzlicher Webserver kaeme nicht an die Ports
+  if belegt 80 || belegt 443; then
+    wer=$(wer_lauscht 80 || true); [ -n "$wer" ] || wer=$(wer_lauscht 443 || true)
+    say "==> Kein nginx/Apache gefunden, aber Port 80/443 ist belegt (${wer:-unbekannter Dienst}) — einen Webserver installiere ich daneben nicht." "==> No nginx/Apache found, but port 80/443 is in use (${wer:-unknown service}) — I will not install a web server next to it."
+    return 1
+  fi
+  if [ -z "$wahl" ]; then
+    [ -t 0 ] || return 1   # ohne Terminal (curl | bash ohne Bildschirm) und ohne --webserver: Vorlage wie bisher
+    echo ""
+    say "==> Auf diesem Server laeuft weder nginx noch Apache." "==> Neither nginx nor Apache is installed on this server."
+    say "    Ich kann einen installieren, den Virtual Host fuer $DOMAIN anlegen und HTTPS per certbot holen." "    I can install one, create the virtual host for $DOMAIN and get HTTPS via certbot."
+    echo "  ${Y}${Z_FRAGE}${N} ${B}$(s "Webserver installieren:" "Install a web server:")${N}   ${C}1${N}) nginx ($(s empfohlen recommended))   ${C}2${N}) Apache   ${C}3${N}) $(s "Keinen (nur Vorlage anzeigen)" "None (only show the template)")"
+    read -r -p "    [1] " wahl </dev/tty || true
+    case "${wahl:-1}" in 1|nginx) wahl="nginx" ;; 2|apache|apache2|httpd) wahl="apache" ;; *) return 1 ;; esac
+  fi
+  if [ "$wahl" = "nginx" ]; then dienst="nginx"; pakete=(nginx)
+  elif command -v apt-get >/dev/null 2>&1; then dienst="apache2"; pakete=(apache2)
+  else dienst="httpd"; pakete=(httpd mod_ssl); fi
+  say "==> $dienst wird installiert …" "==> Installing $dienst …"
+  if [ "${RD_DRY_RUN:-}" = "1" ]; then tu ws_paket "${pakete[@]}"; webserver="$dienst"; ws_neu="ja"; return 0; fi
+  ws_paket "${pakete[@]}" || return 1
+  if [ "$dienst" = "apache2" ]; then a2enmod -q proxy proxy_http headers rewrite >/dev/null 2>&1 || true; fi
+  # RHEL & Co.: SELinux verbietet dem Webserver sonst die Verbindung zur App auf 127.0.0.1 (502)
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then setsebool -P httpd_can_network_connect 1 >/dev/null 2>&1 || true; fi
+  if ! ws_starten "$dienst"; then
+    say "    FEHLER: $dienst ist installiert, startet aber nicht (systemctl status $dienst)." "    ERROR: $dienst is installed but does not start (systemctl status $dienst)."
+    return 1
+  fi
+  # Firewall: nur 80/443 fuer den Webserver oeffnen — der Port der App bleibt zu (sie hoert nur auf 127.0.0.1)
+  if command -v ufw >/dev/null 2>&1; then
+    case "$(ufw status 2>/dev/null || true)" in *"Status: active"*)
+      ufw allow 80/tcp >/dev/null 2>&1 || true; ufw allow 443/tcp >/dev/null 2>&1 || true
+      say "    Firewall (ufw): Port 80 und 443 freigegeben." "    Firewall (ufw): ports 80 and 443 opened." ;;
+    esac
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    { firewall-cmd -q --permanent --add-service=http --add-service=https && firewall-cmd -q --reload; } >/dev/null 2>&1 || true
+    say "    Firewall (firewalld): http und https freigegeben." "    Firewall (firewalld): http and https opened."
+  fi
+  webserver="$dienst"; ws_neu="ja"
+  say "==> $dienst laeuft und startet kuenftig mit dem Server." "==> $dienst is running and will start with the server."
+}
+certbot_installieren() { # certbot_installieren nginx|apache — certbot + Plugin aus der Paketverwaltung (RHEL & Co.: aus EPEL)
+  if ! command -v apt-get >/dev/null 2>&1 && [ -f /etc/redhat-release ] && ! grep -qi fedora /etc/redhat-release && ! rpm -q epel-release >/dev/null 2>&1; then
+    tu ws_paket epel-release || true
+  fi
+  tu ws_paket certbot "python3-certbot-$1"
+}
+hsts_sichern() { # der HTTPS-Eintrag (von certbot ergaenzt bzw. angelegt) muss HSTS senden — fehlt die Zeile, nachtragen
+  local f="" z="" muster="" ok=""
+  [ "${RD_DRY_RUN:-}" != "1" ] || return 0
+  case "$vhost_angelegt" in
+    nginx) f="$datei"; muster='listen[ \t]+[^;]*443'; z='    add_header Strict-Transport-Security "max-age=31536000" always;' ;;
+    apache2|httpd) f="${datei%.conf}-le-ssl.conf"; muster='<VirtualHost[^>]*:443>'; z='    Header always set Strict-Transport-Security "max-age=31536000"' ;;
+    *) return 0 ;;
+  esac
+  [ -f "$f" ] || return 0
+  if grep -q 'Strict-Transport-Security' "$f"; then say "    HSTS aktiv (Strict-Transport-Security, 1 Jahr)." "    HSTS active (Strict-Transport-Security, 1 year)."; return 0; fi
+  grep -qE "$muster" "$f" || return 0
+  cp -a "$f" "$f.bak-hsts"
+  awk -v z="$z" -v m="$muster" '{ print } !d && $0 ~ m { print z; d = 1 }' "$f.bak-hsts" > "$f.neu" && cat "$f.neu" > "$f"
+  rm -f "$f.neu"
+  case "$vhost_angelegt" in
+    nginx) if nginx -t >/dev/null 2>&1; then systemctl reload nginx 2>/dev/null || nginx -s reload; ok=1; fi ;;
+    apache2) if apache2ctl configtest >/dev/null 2>&1; then systemctl reload apache2 2>/dev/null || apache2ctl graceful; ok=1; fi ;;
+    httpd) if httpd -t >/dev/null 2>&1; then systemctl reload httpd 2>/dev/null || httpd -k graceful; ok=1; fi ;;
+  esac
+  if [ -n "$ok" ]; then rm -f "$f.bak-hsts"; say "    HSTS ergaenzt (Strict-Transport-Security, 1 Jahr): $f" "    HSTS added (Strict-Transport-Security, 1 year): $f"
+  else cat "$f.bak-hsts" > "$f"; rm -f "$f.bak-hsts"; say "    FEHLER: HSTS liess sich nicht ergaenzen (Konfigtest) — bitte von Hand in $f:  $z" "    ERROR: could not add HSTS (config test) — please add by hand in $f:  $z"; fi
+}
 vhost_angelegt=""; fremd=""
 vhost_einrichten() {
 if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ "$VHOST" = "ja" ]; then
@@ -585,7 +710,9 @@ if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ "$VHOST" = "ja" ]; then
     say "==> Fuer $DOMAIN gibt es schon einen Eintrag: $fremd — den fasse ich nicht an." "==> There is already an entry for $DOMAIN: $fremd — I will not touch it."
     webserver=""
   fi
-  if [ -n "$webserver" ] && ja "==> $(s "Virtual Host fuer $DOMAIN in $webserver anlegen (Backup vorhandener Dateien, Konfigtest, Neuladen)?" "Create a virtual host for $DOMAIN in $webserver (backup of existing files, config test, reload)?")" "j"; then
+  # Kein nginx/Apache da: auf Wunsch einen installieren (setzt webserver) — danach weiter wie mit vorhandenem Webserver
+  if [ -z "$webserver" ] && [ -z "$fremd" ] && [ "$vhost_angelegt" != "vorhanden" ]; then ws_anbieten || true; fi
+  if [ -n "$webserver" ] && { [ -n "$ws_neu" ] || ja "==> $(s "Virtual Host fuer $DOMAIN in $webserver anlegen (Backup vorhandener Dateien, Konfigtest, Neuladen)?" "Create a virtual host for $DOMAIN in $webserver (backup of existing files, config test, reload)?")" "j"; }; then
     stempel=$(date +%Y%m%d-%H%M%S)
     if [ "$webserver" = "nginx" ]; then
       if [ -d /etc/nginx/sites-enabled ]; then datei=/etc/nginx/sites-available/reddrop.conf; link=/etc/nginx/sites-enabled/reddrop.conf
@@ -595,6 +722,7 @@ server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN;
+    add_header Strict-Transport-Security \"max-age=31536000\" always;
     client_max_body_size 0;
     proxy_request_buffering off;
     proxy_read_timeout 3600s;
@@ -621,19 +749,21 @@ server {
     ProxyPass / http://127.0.0.1:$PORT/
     ProxyPassReverse / http://127.0.0.1:$PORT/
     RequestHeader set X-Forwarded-Proto \"expr=%{REQUEST_SCHEME}\"
+    Header always set Strict-Transport-Security \"max-age=31536000\"
 </VirtualHost>"
       [ -f "$datei" ] && tu cp -a "$datei" "$datei.bak-$stempel"
       if [ "${RD_DRY_RUN:-}" = "1" ]; then echo "    ($(s Probelauf "dry run")) $datei:"; echo "$inhalt" | sed 's/^/        /'; else printf '%s\n' "$inhalt" > "$datei"; fi
       if [ "$webserver" = "apache2" ]; then
         tu a2enmod -q proxy proxy_http headers
         tu a2ensite -q reddrop.conf
-        if tu apache2ctl configtest; then tu systemctl reload apache2; vhost_angelegt="$webserver"; else say "    FEHLER: Apache-Konfigtest schlaegt fehl — $datei bitte pruefen." "    ERROR: Apache config test fails — please check $datei."; fi
+        if tu apache2ctl configtest; then tu systemctl reload apache2 2>/dev/null || tu apache2ctl graceful; vhost_angelegt="$webserver"; else say "    FEHLER: Apache-Konfigtest schlaegt fehl — $datei bitte pruefen." "    ERROR: Apache config test fails — please check $datei."; fi
       else
-        if tu httpd -t; then tu systemctl reload httpd; vhost_angelegt="$webserver"; else say "    FEHLER: httpd -t schlaegt fehl — $datei bitte pruefen." "    ERROR: httpd -t fails — please check $datei."; fi
+        if tu httpd -t; then tu systemctl reload httpd 2>/dev/null || tu httpd -k graceful; vhost_angelegt="$webserver"; else say "    FEHLER: httpd -t schlaegt fehl — $datei bitte pruefen." "    ERROR: httpd -t fails — please check $datei."; fi
       fi
     fi
   elif [ -z "$webserver" ] && [ -z "$fremd" ] && [ "$vhost_angelegt" != "vorhanden" ]; then
     say "==> Keinen nginx/Apache gefunden — die Vorlage fuer deinen Webserver steht unten." "==> No nginx/Apache found — the template for your web server is shown below."
+    if ! belegt 80 && ! belegt 443; then say "    Oder alles automatisch (Webserver, Virtual Host, HTTPS):  sudo bash install.sh --webserver nginx  (bzw. apache)" "    Or everything automatically (web server, virtual host, HTTPS):  sudo bash install.sh --webserver nginx  (or apache)"; fi
   fi
 
   # 7. Zertifikat per certbot (HTTP-01 ueber den gerade angelegten Virtual Host)
@@ -642,18 +772,19 @@ server {
     meine_ip=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
     domain_ip=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1; exit}' || true)
     if [ -n "$meine_ip" ] && [ "$domain_ip" != "$meine_ip" ]; then
+      # selbst installierter Webserver: certbot schon mitbringen — spaeter reicht dann der eine Befehl unten
+      if [ -n "$ws_neu" ] && ! command -v certbot >/dev/null 2>&1; then certbot_installieren "$plugin" || true; fi
       say "==> $DOMAIN zeigt auf '${domain_ip:-nichts}', dieser Server hat $meine_ip — Zertifikat spaeter holen:" "==> $DOMAIN points to '${domain_ip:-nothing}', this server has $meine_ip — get the certificate later:"
       echo "    certbot --$plugin -d $DOMAIN --redirect"
     elif ja "==> $(s "HTTPS-Zertifikat fuer $DOMAIN mit certbot holen (Let's Encrypt)?" "Get an HTTPS certificate for $DOMAIN with certbot (Let's Encrypt)?")" "j"; then
       if ! command -v certbot >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then tu apt-get install -y -qq certbot "python3-certbot-$plugin"
-        elif command -v dnf >/dev/null 2>&1; then tu dnf install -y -q certbot "python3-certbot-$plugin"
+        if command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then certbot_installieren "$plugin" || true
         else say "    certbot fehlt und konnte nicht installiert werden — bitte von Hand: certbot --$plugin -d $DOMAIN --redirect" "    certbot is missing and could not be installed — please run by hand: certbot --$plugin -d $DOMAIN --redirect"; fi
       fi
       if command -v certbot >/dev/null 2>&1 || [ "${RD_DRY_RUN:-}" = "1" ]; then
         [ -n "$EMAIL" ] || EMAIL=$(frage "    $(s "E-Mail fuer Ablauf-Hinweise von Let's Encrypt (leer = keine)" "Email for Let's Encrypt expiry notices (empty = none)")" "")
         if [ -n "$EMAIL" ]; then mail_arg=(-m "$EMAIL"); else mail_arg=(--register-unsafely-without-email); fi
-        if tu certbot "--$plugin" -d "$DOMAIN" --redirect -n --agree-tos "${mail_arg[@]}"; then https_ok=1
+        if tu certbot "--$plugin" -d "$DOMAIN" --redirect -n --agree-tos "${mail_arg[@]}"; then https_ok=1; hsts_sichern || true
         else say "    certbot hat nicht geklappt (Ausgabe oben). Spaeter nochmal: certbot --$plugin -d $DOMAIN --redirect" "    certbot did not work (output above). Try again later: certbot --$plugin -d $DOMAIN --redirect"; fi
       fi
     fi
@@ -932,6 +1063,7 @@ elif [ "$MODUS" = "port" ]; then
     echo "    }"
     echo ""
     say "    HTTPS danach z. B. mit:  certbot --nginx -d ${DOMAIN:-drop.example.com} --redirect" "    HTTPS afterwards e.g. with:  certbot --nginx -d ${DOMAIN:-drop.example.com} --redirect"
+    say "    Und HSTS im HTTPS-Eintrag:  nginx  add_header Strict-Transport-Security \"max-age=31536000\" always;   Apache  Header always set Strict-Transport-Security \"max-age=31536000\"" "    And HSTS in the HTTPS entry:  nginx  add_header Strict-Transport-Security \"max-age=31536000\" always;   Apache  Header always set Strict-Transport-Security \"max-age=31536000\""
     say "    Zum Ausprobieren ohne Domain:  ssh -L ${PORT}:127.0.0.1:${PORT} root@${ip}  und dann  http://127.0.0.1:${PORT}" "    To try it without a domain:  ssh -L ${PORT}:127.0.0.1:${PORT} root@${ip}  and then  http://127.0.0.1:${PORT}"
   fi
   say "    Im Assistenten ist „Hinter eigenem Webserver“ mit deiner Domain schon vorgewaehlt." "    In the wizard, “Behind your web server” with your domain is already preselected."
