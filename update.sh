@@ -35,13 +35,52 @@ else Z_SCHRITT=">"; Z_OK="OK"; Z_FEHLER="X"; Z_V="|"; fi
 SPR="de"
 s() { if [ "$SPR" = "de" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 kurz() { printf '%s' "$1" | tail -3 | tr '\n"\\' '   ' | cut -c1-400; }
+# Status und Protokoll liegen im Datenordner der App — der gehoert dem App-Nutzer im Container, dieses Skript laeuft
+# als root: nie durch einen dort gelegten Link schreiben (gleiche Funktionen wie im Update-Dienst von install.sh).
+# sicher_ordner <ordner> — 0, wenn <ordner> ein echter Ordner ist und kein Link (auch nicht im letzten Glied):
+# physischer Pfad == physischer Pfad des Elternordners + Name.
+sicher_ordner() {
+  local d="${1%/}" p
+  [ -d "$d" ] && [ ! -L "$d" ] || return 1
+  p=$(cd -P "${d%/*}/" 2>/dev/null && pwd) || return 1
+  [ "$(cd -P "$d" 2>/dev/null && pwd)" = "${p%/}/${d##*/}" ]
+}
+# ablegen <pfad> — stdin als <pfad> ablegen (644), ohne je einem Link zu folgen: neue Datei mit O_EXCL (set -C)
+# im Ordner selbst (cd: ein danach vertauschter Ordner aendert nichts), dann umbenennen (folgt keinem Link).
+ablegen() {
+  local d="${1%/*}" n="${1##*/}"
+  sicher_ordner "$d" || return 1
+  ( cd -P "$d" || exit 1
+    t=".neu.$$.$RANDOM$RANDOM"
+    ( umask 022; set -C; cat > "$t" ) 2>/dev/null || exit 1
+    mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; } )
+}
+# log_oeffnen <pfad> <fd> — <pfad> frisch anlegen (644) und in EINEM Schritt (O_EXCL) auf Kanal <fd> oeffnen;
+# danach nur noch ueber /dev/fd/<fd> schreiben und lesen. Beispiel:  log_oeffnen "$DATEN/.update.log" 6 && LOG=/dev/fd/6
+log_oeffnen() {
+  local d="${1%/*}" n="${1##*/}" t alt="$PWD" um rc=1 c=""
+  case "$2" in [3-9]) ;; *) return 1 ;; esac
+  sicher_ordner "$d" || return 1
+  cd -P "$d" || return 1
+  t=".neu.$$.$RANDOM$RANDOM"; um=$(umask); umask 022
+  case "$-" in *C*) c=1 ;; esac
+  set -C
+  if eval "exec $2>\"\$t\"" 2>/dev/null; then rc=0; fi
+  # gleich im Anhaenge-Modus neu oeffnen — ueber den Kanal selbst (dieselbe Datei), nicht ueber den Pfad
+  if [ "$rc" = 0 ]; then eval "exec $2>>/dev/fd/$2" 2>/dev/null || true; fi
+  [ -n "$c" ] || set +C; umask "$um"
+  if [ "$rc" = 0 ]; then mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; }; fi
+  cd "$alt" 2>/dev/null || true
+  return "$rc"
+}
 status() { # status laeuft|fertig|fehler "Meldung" — nur mit --status (Panel)
   [ -n "$STATUS" ] || return 0
-  printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "$1" "$(date -Is)" "$(kurz "$2")" > "$STATUS" && chmod 644 "$STATUS"
+  printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "$1" "$(date -Is)" "$(kurz "$2")" | ablegen "$STATUS" || true
 }
-# Vom Update-Dienst gestartet (--status): Live-Protokoll fuers Panel neben der Status-Datei (.update.log, je Lauf neu)
-LOG=""
-if [ -n "$STATUS" ]; then LOG="$(dirname "$STATUS")/.update.log"; { : > "$LOG" && chmod 644 "$LOG"; } 2>/dev/null || LOG=""; fi
+# Vom Update-Dienst gestartet (--status): Live-Protokoll fuers Panel neben der Status-Datei (.update.log, je Lauf neu).
+# Frisch angelegt und auf Kanal 6 geoeffnet; geschrieben wird nur ueber /dev/fd/6.
+LOG=""; LOG_PFAD=""
+if [ -n "$STATUS" ]; then LOG_PFAD="$(dirname "$STATUS")/.update.log"; if log_oeffnen "$LOG_PFAD" 6; then LOG=/dev/fd/6; else LOG_PFAD=""; fi; fi
 protokoll() { [ -n "$LOG" ] && printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG"; return 0; }
 # Im Terminal: Schritte mit Nummer und ein Spinner mit laufenden Sekunden, damit man sieht, dass etwas passiert.
 # Die Docker-Ausgabe landet in einer Datei (letzte Zeile klein neben dem Spinner); bei einem Fehler erscheinen die
@@ -201,7 +240,11 @@ if unraid_neu=$(unraid_ziel "$DIR"); then
   if unraid_umziehen "$unraid_alt" "$unraid_neu"; then
     DIR="$unraid_neu"; cd "$DIR" || abbruch "Ordner $DIR nicht lesbar" "Cannot open $DIR"
     case "$STATUS" in "$unraid_alt"/*) STATUS="$DIR${STATUS#"$unraid_alt"}" ;; esac
-    case "${LOG:-}" in "$unraid_alt"/*) LOG="$DIR${LOG#"$unraid_alt"}" ;; esac
+    # Protokoll im umgezogenen Ordner neu anlegen und das bisherige mitnehmen
+    case "${LOG_PFAD:-}" in "$unraid_alt"/*)
+      LOG_PFAD="$DIR${LOG_PFAD#"$unraid_alt"}"; log_bisher=$(cat /dev/fd/6 2>/dev/null || true)
+      if log_oeffnen "$LOG_PFAD" 6; then printf '%s\n' "$log_bisher" >> /dev/fd/6; else LOG=""; LOG_PFAD=""; fi ;;
+    esac
     info "Unraid: Installation nach $DIR umgezogen — übersteht jetzt Neustarts (alter Ordner: $unraid_alt.umgezogen-…)" "Unraid: installation moved to $DIR — now survives reboots (old folder: $unraid_alt.umgezogen-…)"
   else
     info "${Y}Unraid: $unraid_alt liegt im Arbeitsspeicher (nach einem Neustart weg), der Umzug nach $unraid_neu ging nicht — dort liegt schon etwas.${N}" "${Y}Unraid: $unraid_alt lives in RAM (gone after a reboot), moving to $unraid_neu failed — something is already there.${N}"

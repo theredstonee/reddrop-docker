@@ -16,6 +16,8 @@
 #                         samt Virtual Host + HTTPS per certbot; ohne Terminal und ohne Schalter nur die Vorlage)
 #                       --virenscan / --no-virenscan (ClamAV mitstarten, ~1,5 GB RAM; sonst fragt er)
 #                       --uninstall / --deinstallieren (Container, Webserver-Eintraege, auf Wunsch alle Daten)
+#                       --nur-vhost --domain d --webserver nginx|apache (nur Webserver + Virtual Host + HTTPS fuer eine
+#                         bestehende Installation im Port-Modus, ohne Fragen; ruft der Update-Dienst fuer den Assistenten auf)
 # Ein zweiter Aufruf aktualisiert nur (Image ziehen, neu starten) und fragt nichts mehr.
 # Nur aktualisieren (nichts neu einrichten, keine Fragen):
 #   curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash
@@ -79,8 +81,16 @@ inst_suchen() {
     d=$(dirname "$f"); [ -f "$d/.env" ] && inst_echt "$d" && printf '%s\n' "$d"
   done < <(find /opt /srv /root /home /mnt/user/appdata /mnt/cache/appdata /docker /data -maxdepth 3 -name docker-compose.yml 2>/dev/null) | awk 'NF && !s[$0]++'
 }
+# --nur-vhost (vom Update-Dienst): nur im Ordner der Installation (RD_DIR) arbeiten — nichts suchen, umziehen oder laden
+NUR_VHOST=""
+for a in "$@"; do [ "$a" = "--nur-vhost" ] && NUR_VHOST="ja"; done
+if [ -n "$NUR_VHOST" ]; then
+  v_dir="${RD_DIR:-$(dirname "$0")}"
+  [ -f "$v_dir/docker-compose.yml" ] && [ -f "$v_dir/.env" ] || { echo "FEHLER: --nur-vhost braucht RD_DIR mit einer RedDrop-Installation / ERROR: --nur-vhost needs RD_DIR with a RedDrop installation"; exit 1; }
+  cd "$v_dir"
+fi
 GEFUNDEN=""
-if [ -z "${RD_DIR:-}" ] && ! { [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; }; then
+if [ -z "$NUR_VHOST" ] && [ -z "${RD_DIR:-}" ] && ! { [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; }; then
   g_alle=$(inst_suchen 2>/dev/null || true)
   case "$(printf '%s\n' "$g_alle" | grep -c . || true)" in
     0) ;;
@@ -90,7 +100,7 @@ if [ -z "${RD_DIR:-}" ] && ! { [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compo
   esac
 fi
 UNRAID_ZIEL=""
-if [ -z "${RD_DIR:-}" ] && [ -f /etc/unraid-version ] && [ -d /mnt/user ]; then
+if [ -z "$NUR_VHOST" ] && [ -z "${RD_DIR:-}" ] && [ -f /etc/unraid-version ] && [ -d /mnt/user ]; then
   UNRAID_ZIEL="/mnt/user/appdata/reddrop"
   u_hier=""; if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then u_hier="$(cd "$(dirname "$0")" && pwd)"; fi
   u_alt="${u_hier:-${GEFUNDEN:-/opt/reddrop}}"
@@ -109,7 +119,9 @@ if [ -z "${RD_DIR:-}" ] && [ -f /etc/unraid-version ] && [ -d /mnt/user ]; then
   fi
 fi
 # Ueber curl | bash gestartet (oder Dateien fehlen): alles nach /opt/reddrop (Unraid: /mnt/user/appdata/reddrop) holen und dort weitermachen
-if [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then
+if [ -n "$NUR_VHOST" ]; then
+  :   # schon oben in RD_DIR gewechselt
+elif [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then
   cd "$(dirname "$0")"
 else
   ZIEL="${RD_DIR:-${GEFUNDEN:-${UNRAID_ZIEL:-/opt/reddrop}}}"
@@ -137,6 +149,7 @@ while [ $# -gt 0 ]; do
       WS_WAHL="${WS_WAHL,,}"
       case "$WS_WAHL" in nginx|apache|apache2|httpd|keiner|none) ;; *) echo "--webserver: nginx | apache | keiner (none)"; exit 1 ;; esac ;;
     --dienst) NUR_DIENST="ja"; shift ;;   # nur den Update-Dienst neu einrichten (ruft update.sh auf)
+    --nur-vhost) shift ;;                 # oben schon erkannt (NUR_VHOST)
     --virenscan) VS="ja"; shift ;;
     --no-virenscan) VS="nein"; shift ;;
     --deinstallieren|--uninstall) WEG="ja"; shift ;;
@@ -154,6 +167,8 @@ if locale charmap 2>/dev/null | grep -qi 'utf-\?8' || echo "${LANG:-}${LC_ALL:-}
 else
   Z_SCHRITT=">"; Z_OK="OK"; Z_FEHLER="X"; Z_FRAGE="?"; Z_PUNKT="-"; K_OL="+"; K_OR="+"; K_UL="+"; K_UR="+"; K_H="-"; K_V="|"; SPIN=('|' '/' '-' '\')
 fi
+# --nur-vhost schreibt ins Live-Protokoll des Assistenten: Schritte dort immer als „==> …“
+if [ -n "$NUR_VHOST" ]; then Z_SCHRITT="==>"; Z_OK="==>"; Z_FEHLER="==>"; fi
 VERSION_TXT=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1 || true)
 banner() {
   echo ""
@@ -278,6 +293,45 @@ if [ -n "$WEG" ]; then
   exit 0
 fi
 
+# Schreibzugriffe von root in den Datenordner der App (gehoert dem App-Nutzer im Container): nie einem Link folgen.
+# Diese drei Funktionen stehen woertlich auch im Dienst (declare -f) und in update.sh.
+# sicher_ordner <ordner> — 0, wenn <ordner> ein echter Ordner ist und kein Link (auch nicht im letzten Glied):
+# physischer Pfad == physischer Pfad des Elternordners + Name.
+sicher_ordner() {
+  local d="${1%/}" p
+  [ -d "$d" ] && [ ! -L "$d" ] || return 1
+  p=$(cd -P "${d%/*}/" 2>/dev/null && pwd) || return 1
+  [ "$(cd -P "$d" 2>/dev/null && pwd)" = "${p%/}/${d##*/}" ]
+}
+# ablegen <pfad> — stdin als <pfad> ablegen (644), ohne je einem Link zu folgen: neue Datei mit O_EXCL (set -C)
+# im Ordner selbst (cd: ein danach vertauschter Ordner aendert nichts), dann umbenennen (folgt keinem Link).
+ablegen() {
+  local d="${1%/*}" n="${1##*/}"
+  sicher_ordner "$d" || return 1
+  ( cd -P "$d" || exit 1
+    t=".neu.$$.$RANDOM$RANDOM"
+    ( umask 022; set -C; cat > "$t" ) 2>/dev/null || exit 1
+    mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; } )
+}
+# log_oeffnen <pfad> <fd> — <pfad> frisch anlegen (644) und in EINEM Schritt (O_EXCL) auf Kanal <fd> oeffnen;
+# danach nur noch ueber /dev/fd/<fd> schreiben und lesen. Beispiel:  log_oeffnen "$DATEN/.update.log" 6 && LOG=/dev/fd/6
+log_oeffnen() {
+  local d="${1%/*}" n="${1##*/}" t alt="$PWD" um rc=1 c=""
+  case "$2" in [3-9]) ;; *) return 1 ;; esac
+  sicher_ordner "$d" || return 1
+  cd -P "$d" || return 1
+  t=".neu.$$.$RANDOM$RANDOM"; um=$(umask); umask 022
+  case "$-" in *C*) c=1 ;; esac
+  set -C
+  if eval "exec $2>\"\$t\"" 2>/dev/null; then rc=0; fi
+  # gleich im Anhaenge-Modus neu oeffnen — ueber den Kanal selbst (dieselbe Datei), nicht ueber den Pfad
+  if [ "$rc" = 0 ]; then eval "exec $2>>/dev/fd/$2" 2>/dev/null || true; fi
+  [ -n "$c" ] || set +C; umask "$um"
+  if [ "$rc" = 0 ]; then mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; }; fi
+  cd "$alt" 2>/dev/null || true
+  return "$rc"
+}
+
 # 5b. Update-Dienst: der Knopf „Jetzt aktualisieren“ im Panel legt eine Anfrage-Datei in /data ab, ein
 #     systemd-Pfad-Dienst auf dem Server zieht dann das neue Image und startet die App neu. So braucht
 #     RedDrop selbst keinen Zugriff auf Docker.
@@ -297,12 +351,23 @@ set -uo pipefail
 # cron (z. B. Unraid) startet mit sehr kurzem PATH
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\${PATH:-}"
 DIR="$PWD"; DATEN="$daten"; QUELLE="$QUELLE"
-[ -f "\$DATEN/.update-anfrage" ] || exit 0
-aktion=\$(sed -n 's/.*"aktion":"\([a-z-]*\)".*/\1/p' "\$DATEN/.update-anfrage")
-tok=\$(sed -n 's#.*"token":"\([A-Za-z0-9+/=_-]*\)".*#\1#p' "\$DATEN/.update-anfrage")
+[ -e "\$DATEN/.update-anfrage" ] || [ -L "\$DATEN/.update-anfrage" ] || exit 0
+# Der Datenordner gehoert dem App-Nutzer, dieser Dienst ist root: nie einem Link folgen (lesen wie schreiben)
+$(declare -f sicher_ordner ablegen log_oeffnen)
+sicher_ordner "\$DATEN" || exit 1
+if [ -L "\$DATEN/.update-anfrage" ] || [ ! -f "\$DATEN/.update-anfrage" ]; then rm -f "\$DATEN/.update-anfrage"; exit 0; fi
+anfrage=\$(head -c 8192 "\$DATEN/.update-anfrage" 2>/dev/null)
 rm -f "\$DATEN/.update-anfrage"
-status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" > "\$DATEN/\$1"; chmod 644 "\$DATEN/\$1"; }
+aktion=\$(printf '%s' "\$anfrage" | sed -n 's/.*"aktion":"\([a-z-]*\)".*/\1/p')
+tok=\$(printf '%s' "\$anfrage" | sed -n 's#.*"token":"\([A-Za-z0-9+/=_-]*\)".*#\1#p')
+# Webserver-Auftrag: nur Kleinbuchstaben/Ziffern/Punkt/Bindestrich kommen durch, unten noch einmal streng geprueft
+art=\$(printf '%s' "\$anfrage" | sed -n 's/.*"art":"\([a-z]*\)".*/\1/p' | head -c 10)
+dom=\$(printf '%s' "\$anfrage" | sed -n 's/.*"domain":"\([a-z0-9.-]*\)".*/\1/p' | head -c 300)
+jid=\$(printf '%s' "\$anfrage" | sed -n 's/.*"id":"\([a-f0-9]*\)".*/\1/p' | head -c 32)
+status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" | ablegen "\$DATEN/\$1"; }
 kurz() { echo "\$1" | tail -3 | tr '\n"\\\\' '   '; }
+$(declare -f ws_info)
+ws_info_schreiben() { ws_info | ablegen "\$DATEN/.webserver-info"; }
 profil() { # profil an|aus [name] — Profil (Standard "virenscan") in COMPOSE_PROFILES der .env
   local n="\${2:-virenscan}" p; p=\$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
   p=\$(echo " \$p " | sed "s/ \$n / /g" | xargs)
@@ -329,6 +394,32 @@ case "\${aktion:-update}" in
     status .tunnel-status laeuft ""
     if out=\$(docker compose stop cloudflared 2>&1 && docker compose rm -f cloudflared 2>&1); then profil aus tunnel; sed -i '/^RD_TUNNEL_TOKEN=/d' .env; status .tunnel-status fertig ""
     else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
+  webserver-info) ws_info_schreiben ;;
+  webserver)
+    # Assistent: Webserver (falls keiner da) + Virtual Host + HTTPS — mit install.sh --nur-vhost, also denselben
+    # Funktionen wie bei der Installation. Art und Domain hier noch einmal streng pruefen (Whitelist / Regex).
+    wstat() { printf '{"status":"%s","zeit":"%s","id":"%s","domain":"%s","art":"%s","https":%s,"meldung":"%s"}\n' "\$1" "\$(date -Is)" "\$jid" "\$dom" "\$art" "\${3:-false}" "\$2" | ablegen "\$DATEN/.webserver-status"; }
+    re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\$'
+    case "\$art" in nginx|apache) ;; *) art=""; wstat fehler "Unbekannter Webserver (nur nginx oder apache)"; exit 1 ;; esac
+    if [ -z "\$dom" ] || [ \${#dom} -gt 253 ] || ! [[ "\$dom" =~ \$re ]]; then dom=""; wstat fehler "Ungueltige Domain"; exit 1; fi
+    grep -q 'compose.port.yml' .env 2>/dev/null || { wstat fehler "Nur im Port-Modus (ohne eigenen Caddy) moeglich"; exit 1; }
+    # Live-Protokoll: frische Datei, gleich auf Kanal 8 geoeffnet — geschrieben und gelesen wird nur darueber
+    log_oeffnen "\$DATEN/.webserver.log" 8 || { wstat fehler "Datenordner nicht beschreibbar"; exit 1; }
+    wstat laeuft ""
+    skript=\$(mktemp)
+    if ! { curl -fsSL --max-time 30 -o "\$skript" "\$QUELLE/install.sh?t=\$(date +%s)" 2>/dev/null && bash -n "\$skript" 2>/dev/null && grep -q -- '--nur-vhost' "\$skript"; }; then
+      if [ -f "\$DIR/install.sh" ] && grep -q -- '--nur-vhost' "\$DIR/install.sh"; then cp -f "\$DIR/install.sh" "\$skript"
+      else rm -f "\$skript"; wstat fehler "install.sh mit --nur-vhost weder von GitHub noch im Ordner gefunden"; exit 1; fi
+    fi
+    RD_DIR="\$DIR" RD_KEIN_BANNER=1 RD_QUELLE="\$QUELLE" bash "\$skript" --nur-vhost --domain "\$dom" --webserver "\$art" </dev/null >&8 2>&1 8>&-; rc=\$?
+    rm -f "\$skript"
+    letzte() { grep -E "\$1" /dev/fd/8 | tail -1 | sed 's/^[^A-Za-z]*//' | tr -d '\000-\010\013-\037' | tr '\n\t"\\\\' '    ' | cut -c1-300; }
+    case "\$rc" in
+      0) wstat fertig "" true ;;
+      3) wstat fertig "\$(letzte 'HTTPS|certbot')" false ;;
+      *) wstat fehler "\$(letzte 'FEHLER|ERROR')" ;;
+    esac
+    ws_info_schreiben ;;
   *)
     status .update-status laeuft ""
     # Erst das neueste update.sh holen: es bringt Dateien, Image und diesen Dienst selbst auf den neuesten Stand
@@ -382,194 +473,12 @@ SKRIPT
     chmod 644 /etc/cron.d/reddrop-update; ausloeser="cron"
   fi
   [ -n "$ausloeser" ] || { DIENST_GRUND="$(s "Weder systemd noch cron laufen auf diesem Server – ohne einen davon kann der Knopf im Panel nichts ausloesen." "Neither systemd nor cron is running on this server – without one the panel button cannot trigger anything.")"; return 1; }
-  printf '%s\naktionen=update virenscan tunnel\nstand=2\n' "$PWD" > "$daten/.updater"; chmod 644 "$daten/.updater"
+  printf '%s\naktionen=update virenscan tunnel webserver\nstand=3\n' "$PWD" | ablegen "$daten/.updater" || { DIENST_GRUND="$(s "Die Marker-Datei $daten/.updater liess sich nicht anlegen (Datenordner kein echter Ordner?)." "Could not create the marker file $daten/.updater (data folder not a real folder?).")"; return 1; }
+  # gleich einmal fuer den Assistenten festhalten, welcher Webserver da ist (spaeter frisch per Aktion „webserver-info“)
+  { ws_info | ablegen "$daten/.webserver-info"; } 2>/dev/null || true
   say "==> Update-Dienst eingerichtet ($ausloeser; Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up ($ausloeser; panel → version at the bottom left → “Update now”)"
 }
 
-
-# Nur den Update-Dienst neu einrichten (update.sh ruft das nach jedem Update auf) — ohne Fragen, sonst bleibt alles
-if [ -n "$NUR_DIENST" ]; then
-  mkdir -p import && chmod 755 import
-  updater_einrichten || { say "FEHLER: Update-Dienst nicht eingerichtet: $DIENST_GRUND" "ERROR: update service not set up: $DIENST_GRUND"; exit 1; }
-  exit 0
-fi
-
-say "==> RedDrop wird eingerichtet" "==> Setting up RedDrop"
-
-# 1. Docker (falls noch nicht da)
-if ! command -v docker >/dev/null 2>&1; then
-  say "==> Docker wird installiert …" "==> Installing Docker …"
-  curl -fsSL https://get.docker.com | sh
-fi
-docker compose version >/dev/null 2>&1 || { say "FEHLER: 'docker compose' fehlt. Bitte Docker aktualisieren." "ERROR: 'docker compose' is missing. Please update Docker."; exit 1; }
-for f in docker-compose.yml compose.caddy.yml compose.port.yml Caddyfile; do
-  [ -f "$f" ] || curl -fsSL -o "$f" "$QUELLE/$f" || { say "FEHLER: $f fehlt neben install.sh und konnte nicht geladen werden." "ERROR: $f is missing next to install.sh and could not be downloaded."; exit 1; }
-done
-
-# 2. Bei wenig Arbeitsspeicher eine Auslagerungsdatei anlegen (unter 1,5 GB RAM, noch kein Swap)
-ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-if [ "$ram_mb" -lt 1500 ] && [ "$(swapon --noheadings 2>/dev/null | wc -l)" -eq 0 ] && [ ! -f /swapfile ]; then
-  say "==> Nur ${ram_mb} MB RAM: lege 1 GB Auslagerungsdatei an …" "==> Only ${ram_mb} MB RAM: creating a 1 GB swap file …"
-  fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
-  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-fi
-
-# 3. .env: Datenbank-Passwort nur beim ersten Mal (sonst passt es nicht mehr zur Datenbank)
-# 3a. .env fehlt, aber die Container dieser Installation gibt es noch (z. B. Unraid nach einem Neustart: Ordner im RAM weg,
-#     Docker-Volumes noch da): Datenbank-Passwort von dort — ein neu gewuerfeltes passte nicht mehr zur Datenbank.
-#     Eine NEU angelegte .env wird bei einem Abbruch (Strg+C) vor Schritt 4 wieder entfernt — sonst fehlte spaeter der Weg nach aussen.
-ENV_NEU=0; WEG_FERTIG=0
-if [ ! -f .env ]; then
-  env_db=$(docker ps -aq --filter "label=com.docker.compose.project=$(basename "$PWD")" --filter label=com.docker.compose.service=db 2>/dev/null || true)
-  env_db=${env_db%%$'\n'*}
-  env_pw=""
-  [ -n "$env_db" ] && env_pw=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$env_db" 2>/dev/null | sed -n 's/^POSTGRES_PASSWORD=//p' || true)
-  if [ -n "$env_pw" ]; then
-    printf 'DB_PASSWORD=%s\nTZ=Europe/Berlin\n' "$env_pw" > .env && chmod 600 .env
-    say "==> .env fehlte — Datenbank-Passwort aus dem vorhandenen Datenbank-Container übernommen" "==> .env was missing — database password taken from the existing database container"
-  else
-    ENV_NEU=1
-  fi
-fi
-trap 'if [ "${ENV_NEU:-0}" = 1 ] && [ "${WEG_FERTIG:-0}" != 1 ]; then rm -f "$PWD/.env"; fi' EXIT
-if [ ! -f .env ]; then
-  printf 'DB_PASSWORD=%s\nTZ=Europe/Berlin\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > .env
-  chmod 600 .env
-  say "==> .env mit zufaelligem Datenbank-Passwort angelegt" "==> Created .env with a random database password"
-fi
-# Sprache merken — gilt auch fuer den Einrichtungs-Assistenten
-if grep -q '^RD_LANG=' .env; then sed -i "s/^RD_LANG=.*/RD_LANG=$SPR/" .env; else echo "RD_LANG=$SPR" >> .env; fi
-
-# Weg nach aussen sichern: kennt die .env keinen (z. B. nach einer abgebrochenen Einrichtung), wuerde ein Neustart den
-# freigegebenen Port bzw. Caddy verlieren — dann vom laufenden Container uebernehmen, sonst aus der letzten Sicherung.
-weg_retten() {
-  WEG_GERETTET=""
-  if grep -q '^COMPOSE_FILE=' .env 2>/dev/null; then return 0; fi
-  local proj c port ip alt
-  proj=$(basename "$PWD")
-  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=caddy 2>/dev/null || true)
-  if [ -n "$c" ]; then
-    echo "COMPOSE_FILE=docker-compose.yml:compose.caddy.yml" >> .env; WEG_GERETTET="Caddy"; return 0
-  fi
-  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=app 2>/dev/null || true)
-  c=${c%%$'\n'*}
-  port=""; ip=""
-  if [ -n "$c" ]; then
-    port=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostPort}}{{end}}' "$c" 2>/dev/null || true)
-    ip=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostIp}}{{end}}' "$c" 2>/dev/null || true)
-  fi
-  if [ -n "$port" ]; then
-    # leere HostIp heisst: auf allen Adressen (so war es bisher erreichbar)
-    printf 'COMPOSE_FILE=docker-compose.yml:compose.port.yml\nRD_PORT=%s\nRD_BIND=%s\n' "$port" "${ip:-0.0.0.0}" >> .env
-    WEG_GERETTET="Port ${ip:-0.0.0.0}:$port"; return 0
-  fi
-  for alt in $(ls -1d .sicherung/*/ 2>/dev/null | sort -r); do
-    if grep -q '^COMPOSE_FILE=' "${alt}.env" 2>/dev/null; then
-      grep -E '^(COMPOSE_FILE|RD_PORT|RD_BIND|RD_PROXY_DOMAIN)=' "${alt}.env" >> .env || true
-      WEG_GERETTET="Sicherung ${alt%/}"; return 0
-    fi
-  done
-  return 0
-}
-weg_retten
-[ -n "$WEG_GERETTET" ] && say "==> Die .env kannte keinen Weg nach außen — vom laufenden RedDrop übernommen ($WEG_GERETTET)" "==> .env had no way in — taken over from the running RedDrop ($WEG_GERETTET)"
-
-# 4. Weg nach aussen festlegen — nur, solange die .env noch keinen kennt
-if ! grep -q '^COMPOSE_FILE=' .env; then
-  # Bestehende Installation mit altem Compose (Caddy stand noch in docker-compose.yml): Caddy behalten.
-  if [ -z "$MODUS" ] && docker ps --filter "label=com.docker.compose.service=caddy" --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null | grep -qx "$PWD"; then
-    MODUS="caddy"
-  fi
-  if [ -z "$MODUS" ]; then
-    if belegt 80 || belegt 443; then
-      server=$(wer_lauscht 80 || true); [ -n "$server" ] || server=$(wer_lauscht 443 || true)
-      echo ""
-      say "==> Port 80/443 sind schon belegt (${server:-unbekannter Dienst})." "==> Port 80/443 are already in use (${server:-unknown service})."
-      say "    RedDrop bekommt dann einen eigenen Port auf 127.0.0.1, und dein Webserver" "    RedDrop then gets its own port on 127.0.0.1, and your web server"
-      say "    leitet die Domain dorthin weiter (Virtual Host, HTTPS ueber deinen Webserver)." "    forwards the domain to it (virtual host, HTTPS via your web server)."
-      if ja "    $(s "So einrichten? Bei Nein versucht Caddy, Port 80/443 selbst zu belegen." "Set it up this way? If not, Caddy tries to take port 80/443 itself.")" "j"; then MODUS="port"; else MODUS="caddy"; fi
-    else
-      MODUS="caddy"
-    fi
-  fi
-
-  if [ "$MODUS" = "port" ]; then
-    if [ -z "$PORT" ]; then
-      for p in 8080 8081 8082 8088 8090 8100 8180 8280 3100 3200 9080; do belegt "$p" || { PORT=$p; break; }; done
-      [ -n "$PORT" ] || { say "FEHLER: kein freier Port gefunden. Bitte mit --port angeben." "ERROR: no free port found. Please pass one with --port."; exit 1; }
-      PORT=$(frage "    $(s "Port fuer RedDrop (frei)" "Port for RedDrop (free)")" "$PORT")
-    fi
-    belegt "$PORT" && { say "FEHLER: Port $PORT ist belegt." "ERROR: port $PORT is in use."; exit 1; }
-    [ -n "$DOMAIN" ] || DOMAIN=$(frage "    $(s "Domain, unter der das Panel laufen soll (leer = spaeter)" "Domain for the panel (empty = later)")" "")
-    DOMAIN="${DOMAIN,,}"
-    {
-      echo "COMPOSE_FILE=docker-compose.yml:compose.port.yml"
-      echo "RD_PORT=$PORT"
-      echo "RD_BIND=127.0.0.1"
-      echo "RD_PROXY_DOMAIN=$DOMAIN"
-    } >> .env
-    say "==> App hoert auf 127.0.0.1:$PORT (ohne eigenen Caddy)" "==> App listens on 127.0.0.1:$PORT (without its own Caddy)"
-  else
-    echo "COMPOSE_FILE=docker-compose.yml:compose.caddy.yml" >> .env
-    say "==> Caddy uebernimmt Port 80/443 und holt das Zertifikat selbst" "==> Caddy takes port 80/443 and gets the certificate by itself"
-  fi
-fi
-WEG_FERTIG=1
-# 4b. Virenscan (ClamAV als eigener Container) — einmal fragen, danach im Panel umschaltbar
-profil_setzen() { # profil_setzen an|aus  → COMPOSE_PROFILES in der .env um "virenscan" ergaenzen/kuerzen
-  local p; p=$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
-  p=$(echo " $p " | sed 's/ virenscan / /g' | xargs)
-  [ "$1" = "an" ] && p=$(echo "$p virenscan" | xargs)
-  sed -i '/^COMPOSE_PROFILES=/d' .env
-  [ -z "$p" ] || echo "COMPOSE_PROFILES=$(echo "$p" | tr ' ' ',')" >> .env
-}
-if [ -n "$VS" ]; then
-  profil_setzen "$([ "$VS" = "ja" ] && echo an || echo aus)"; grep -q '^RD_VIRENSCAN_GEFRAGT=' .env || echo "RD_VIRENSCAN_GEFRAGT=1" >> .env
-elif ! grep -q '^RD_VIRENSCAN_GEFRAGT=' .env; then
-  echo ""
-  say "==> Virenscan: ClamAV prueft jede hochgeladene Datei, Funde kommen in Quarantaene." "==> Virus scan: ClamAV checks every uploaded file, findings are quarantined."
-  say "    Braucht etwa 1,5 GB Arbeitsspeicher (dieser Server: ${ram_mb} MB). Spaeter im Panel umschaltbar." "    Needs about 1.5 GB of RAM (this server: ${ram_mb} MB). Can be switched later in the panel."
-  if [ "$ram_mb" -ge 3000 ]; then vs_vorgabe="j"; else vs_vorgabe="n"; fi
-  if ja "    $(s "Virenscan einschalten?" "Turn on the virus scan?")" "$vs_vorgabe"; then profil_setzen an; else profil_setzen aus; fi
-  echo "RD_VIRENSCAN_GEFRAGT=1" >> .env
-fi
-
-# Werte aus der .env (auch bei einem zweiten Aufruf)
-PORT=$(sed -n 's/^RD_PORT=//p' .env | tail -1)
-[ -n "$DOMAIN" ] || DOMAIN=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env | tail -1)
-grep -q 'compose.port.yml' .env && MODUS="port" || MODUS="caddy"
-# --domain beim zweiten Aufruf: in der .env nachtragen, damit der Assistent sie vorwaehlt
-if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ]; then
-  [[ "$DOMAIN" =~ ^[a-z0-9.-]+$ ]] || { say "FEHLER: ungueltige Domain: $DOMAIN" "ERROR: invalid domain: $DOMAIN"; exit 1; }
-  if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
-fi
-
-# Passt das Datenbank-Passwort der .env nicht mehr zur Datenbank (.env neu angelegt, das Daten-Volume ist aber das
-# alte — etwa nach einem Unraid-Neustart oder einer zweiten Installation), kommt die App nie an ihre Daten (502).
-# Im Datenbank-Container geht der lokale Socket ohne Passwort: darueber das Passwort der .env setzen, Daten bleiben.
-# Geprueft wird ueber die Netz-Adresse des Containers (wie die App) — 127.0.0.1 ist dort ohne Passwort erlaubt.
-# Rueckgabe: 0 = passt, 2 = angeglichen (App neu gestartet), 1 = liess sich nicht angleichen
-db_passwort_angleichen() {
-  local i
-  [ -n "$(docker compose ps -q db 2>/dev/null)" ] || return 0
-  for i in $(seq 1 30); do docker compose exec -T db pg_isready -q >/dev/null 2>&1 && break; sleep 1; done
-  docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$(hostname -i 2>/dev/null | cut -d" " -f1)" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select 1"' >/dev/null 2>&1 && return 0
-  printf '%s\n' "ALTER USER CURRENT_USER PASSWORD :'pw';" | docker compose exec -T db sh -c 'psql -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD"' >/dev/null 2>&1 || return 1
-  docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$(hostname -i 2>/dev/null | cut -d" " -f1)" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select 1"' >/dev/null 2>&1 || return 1
-  docker compose restart app >/dev/null 2>&1 || true
-  return 2
-}
-
-# 5. Starten
-# Ordner fuer Importe (Seite „Import“ → Server-Ordner), lesbar fuer den App-Nutzer (uid 1000)
-mkdir -p import && chmod 755 import
-if [ -d .output ]; then docker compose up -d --build; else docker compose pull && docker compose up -d; fi
-db_rc=0; db_passwort_angleichen || db_rc=$?
-if [ "$db_rc" = 2 ]; then say "    Das Datenbank-Passwort passte nicht zur .env — angeglichen (Daten bleiben)." "    The database password did not match .env — fixed (data kept)."
-elif [ "$db_rc" = 1 ]; then say "    FEHLER: Das Datenbank-Passwort passt nicht zur .env und liess sich nicht angleichen." "    ERROR: The database password does not match .env and could not be fixed."; fi
-
-# 5b. Update-Dienst einrichten (Funktion steht oben)
-updater_einrichten || say "    Update-Dienst nicht eingerichtet: $DIENST_GRUND" "    Update service not set up: $DIENST_GRUND"
 
 # 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain).
 #    Als Funktion: laeuft auch nach der Einrichtung ueber den Kurzzeit-Link (Schritt 9) mit der dort gewaehlten Domain.
@@ -589,7 +498,8 @@ ws_paket() { # ws_paket <paket …> — ueber apt-get bzw. dnf/yum installieren;
   else rm -f "$log"; return 1; fi
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    if [ -t 1 ]; then printf '\r  %s%s%s %s (%s s)' "$R" "${SPIN[$(( n % ${#SPIN[@]} ))]}" "$N" "$txt" "$(( n / 4 ))"; fi
+    if [ -t 1 ]; then printf '\r  %s%s%s %s (%s s)' "$R" "${SPIN[$(( n % ${#SPIN[@]} ))]}" "$N" "$txt" "$(( n / 4 ))"
+    elif [ "$n" -gt 0 ] && [ $(( n % 40 )) -eq 0 ]; then echo "    $txt … $(( n / 4 )) s"; fi
     n=$((n + 1)); sleep 0.25
   done
   wait "$pid" || rc=$?
@@ -791,6 +701,245 @@ server {
   fi
 fi
 }
+# ws_info — JSON fuer den Einrichtungs-Assistenten: vorhandener Webserver, Port 80/443, Paketverwaltung, certbot, Weg
+#   nach aussen. Steht auch woertlich im Update-Dienst (declare -f, Aktion „webserver-info“) — nur EINE Fassung.
+ws_info() {
+  local ws="" frei=true wer="" paket=false cb=false modus=caddy p
+  if command -v nginx >/dev/null 2>&1; then ws="nginx"
+  elif command -v apache2ctl >/dev/null 2>&1; then ws="apache2"
+  elif command -v httpd >/dev/null 2>&1; then ws="httpd"; fi
+  for p in 80 443; do
+    if command -v ss >/dev/null 2>&1; then
+      ss -ltnH "sport = :$p" 2>/dev/null | grep -q . || continue
+      [ -n "$wer" ] || wer=$(ss -ltnpH "sport = :$p" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | sed 's/users:(("//' || true)
+    else
+      (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null || continue
+    fi
+    frei=false
+  done
+  if command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then paket=true; fi
+  if command -v certbot >/dev/null 2>&1; then cb=true; fi
+  if grep -q 'compose.port.yml' .env 2>/dev/null; then modus=port; fi
+  wer=$(printf '%s' "$wer" | tr -cd 'A-Za-z0-9._-' | cut -c1-40)
+  printf '{"zeit":"%s","modus":"%s","webserver":"%s","portsFrei":%s,"belegtVon":"%s","paketverwaltung":%s,"certbot":%s}\n' "$(date -Is)" "$modus" "$ws" "$frei" "$wer" "$paket" "$cb"
+}
+
+# Nur den Update-Dienst neu einrichten (update.sh ruft das nach jedem Update auf) — ohne Fragen, sonst bleibt alles
+if [ -n "$NUR_DIENST" ]; then
+  mkdir -p import && chmod 755 import
+  updater_einrichten || { say "FEHLER: Update-Dienst nicht eingerichtet: $DIENST_GRUND" "ERROR: update service not set up: $DIENST_GRUND"; exit 1; }
+  exit 0
+fi
+
+# Nur Webserver + Virtual Host + HTTPS (Update-Dienst, Aktion „webserver“ aus dem Einrichtungs-Assistenten) — ohne Fragen,
+# mit denselben Funktionen wie die Installation. Rueckgabe: 0 = mit HTTPS, 3 = Virtual Host steht, HTTPS noch nicht, 1 = Fehler.
+if [ -n "$NUR_VHOST" ]; then
+  # Sperre als PID-Datei (kein flock: ein ohne systemd gestarteter Webserver erbte den Kanal und hielte sie fuer immer)
+  v_sperre="$PWD/.webserver.lock"
+  if [ -f "$v_sperre" ] && v_pid=$(tr -cd '0-9' < "$v_sperre") && [ -n "$v_pid" ] && kill -0 "$v_pid" 2>/dev/null; then
+    say "FEHLER: Es laeuft schon eine Einrichtung des Webservers." "ERROR: A web server setup is already running."; exit 1
+  fi
+  echo "$$" > "$v_sperre"; trap 'rm -f "$v_sperre"' EXIT
+  grep -q 'compose.port.yml' .env 2>/dev/null || { say "FEHLER: Diese Installation hat einen eigenen Caddy (kein Port-Modus) — dort holt Caddy das Zertifikat selbst." "ERROR: This installation has its own Caddy (not port mode) — Caddy gets the certificate itself."; exit 1; }
+  PORT=$(sed -n 's/^RD_PORT=//p' .env | tail -1 | tr -d '[:space:]')
+  [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { say "FEHLER: RD_PORT fehlt in der .env." "ERROR: RD_PORT is missing in .env."; exit 1; }
+  [ -n "$DOMAIN" ] || DOMAIN=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env | tail -1 | tr -d '[:space:]')
+  v_re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
+  { [ "${#DOMAIN}" -le 253 ] && [[ "$DOMAIN" =~ $v_re ]]; } || { say "FEHLER: ungueltige Domain: $DOMAIN" "ERROR: invalid domain: $DOMAIN"; exit 1; }
+  case "$WS_WAHL" in ""|nginx|apache|apache2|httpd) ;; *) say "FEHLER: --webserver: nginx oder apache" "ERROR: --webserver: nginx or apache"; exit 1 ;; esac
+  MODUS="port"; VHOST="ja"; https_ok=""
+  if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
+  say "==> Webserver fuer $DOMAIN einrichten (RedDrop auf 127.0.0.1:$PORT)" "==> Setting up the web server for $DOMAIN (RedDrop on 127.0.0.1:$PORT)"
+  vhost_einrichten
+  if [ -z "$vhost_angelegt" ]; then
+    if [ -n "$fremd" ]; then say "FEHLER: Fuer $DOMAIN gibt es schon einen anderen Eintrag ($fremd) — den fasse ich nicht an. Bitte dort auf 127.0.0.1:$PORT weiterleiten." "ERROR: There is already another entry for $DOMAIN ($fremd) — I will not touch it. Please forward it to 127.0.0.1:$PORT there."
+    elif [ -z "${webserver:-}" ]; then say "FEHLER: Kein Webserver eingerichtet (siehe oben) — Weiterleitung bitte von Hand auf 127.0.0.1:$PORT." "ERROR: No web server set up (see above) — please forward to 127.0.0.1:$PORT by hand."
+    else say "FEHLER: Der Virtual Host liess sich nicht anlegen (siehe oben)." "ERROR: The virtual host could not be created (see above)."; fi
+    exit 1
+  fi
+  if [ -n "${https_ok:-}" ]; then say "==> Fertig. RedDrop laeuft unter  https://$DOMAIN" "==> Done. RedDrop runs at  https://$DOMAIN"; exit 0; fi
+  say "==> Virtual Host steht (http://$DOMAIN) — HTTPS noch nicht: sobald die Domain auf diesen Server zeigt, nochmal versuchen." "==> Virtual host is in place (http://$DOMAIN) — no HTTPS yet: try again once the domain points to this server."
+  exit 3
+fi
+
+say "==> RedDrop wird eingerichtet" "==> Setting up RedDrop"
+
+# 1. Docker (falls noch nicht da)
+if ! command -v docker >/dev/null 2>&1; then
+  say "==> Docker wird installiert …" "==> Installing Docker …"
+  curl -fsSL https://get.docker.com | sh
+fi
+docker compose version >/dev/null 2>&1 || { say "FEHLER: 'docker compose' fehlt. Bitte Docker aktualisieren." "ERROR: 'docker compose' is missing. Please update Docker."; exit 1; }
+for f in docker-compose.yml compose.caddy.yml compose.port.yml Caddyfile; do
+  [ -f "$f" ] || curl -fsSL -o "$f" "$QUELLE/$f" || { say "FEHLER: $f fehlt neben install.sh und konnte nicht geladen werden." "ERROR: $f is missing next to install.sh and could not be downloaded."; exit 1; }
+done
+
+# 2. Bei wenig Arbeitsspeicher eine Auslagerungsdatei anlegen (unter 1,5 GB RAM, noch kein Swap)
+ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+if [ "$ram_mb" -lt 1500 ] && [ "$(swapon --noheadings 2>/dev/null | wc -l)" -eq 0 ] && [ ! -f /swapfile ]; then
+  say "==> Nur ${ram_mb} MB RAM: lege 1 GB Auslagerungsdatei an …" "==> Only ${ram_mb} MB RAM: creating a 1 GB swap file …"
+  fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+# 3. .env: Datenbank-Passwort nur beim ersten Mal (sonst passt es nicht mehr zur Datenbank)
+# 3a. .env fehlt, aber die Container dieser Installation gibt es noch (z. B. Unraid nach einem Neustart: Ordner im RAM weg,
+#     Docker-Volumes noch da): Datenbank-Passwort von dort — ein neu gewuerfeltes passte nicht mehr zur Datenbank.
+#     Eine NEU angelegte .env wird bei einem Abbruch (Strg+C) vor Schritt 4 wieder entfernt — sonst fehlte spaeter der Weg nach aussen.
+ENV_NEU=0; WEG_FERTIG=0
+if [ ! -f .env ]; then
+  env_db=$(docker ps -aq --filter "label=com.docker.compose.project=$(basename "$PWD")" --filter label=com.docker.compose.service=db 2>/dev/null || true)
+  env_db=${env_db%%$'\n'*}
+  env_pw=""
+  [ -n "$env_db" ] && env_pw=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$env_db" 2>/dev/null | sed -n 's/^POSTGRES_PASSWORD=//p' || true)
+  if [ -n "$env_pw" ]; then
+    printf 'DB_PASSWORD=%s\nTZ=Europe/Berlin\n' "$env_pw" > .env && chmod 600 .env
+    say "==> .env fehlte — Datenbank-Passwort aus dem vorhandenen Datenbank-Container übernommen" "==> .env was missing — database password taken from the existing database container"
+  else
+    ENV_NEU=1
+  fi
+fi
+trap 'if [ "${ENV_NEU:-0}" = 1 ] && [ "${WEG_FERTIG:-0}" != 1 ]; then rm -f "$PWD/.env"; fi' EXIT
+if [ ! -f .env ]; then
+  printf 'DB_PASSWORD=%s\nTZ=Europe/Berlin\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > .env
+  chmod 600 .env
+  say "==> .env mit zufaelligem Datenbank-Passwort angelegt" "==> Created .env with a random database password"
+fi
+# Sprache merken — gilt auch fuer den Einrichtungs-Assistenten
+if grep -q '^RD_LANG=' .env; then sed -i "s/^RD_LANG=.*/RD_LANG=$SPR/" .env; else echo "RD_LANG=$SPR" >> .env; fi
+
+# Weg nach aussen sichern: kennt die .env keinen (z. B. nach einer abgebrochenen Einrichtung), wuerde ein Neustart den
+# freigegebenen Port bzw. Caddy verlieren — dann vom laufenden Container uebernehmen, sonst aus der letzten Sicherung.
+weg_retten() {
+  WEG_GERETTET=""
+  if grep -q '^COMPOSE_FILE=' .env 2>/dev/null; then return 0; fi
+  local proj c port ip alt
+  proj=$(basename "$PWD")
+  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=caddy 2>/dev/null || true)
+  if [ -n "$c" ]; then
+    echo "COMPOSE_FILE=docker-compose.yml:compose.caddy.yml" >> .env; WEG_GERETTET="Caddy"; return 0
+  fi
+  c=$(docker ps -q --filter "label=com.docker.compose.project=$proj" --filter label=com.docker.compose.service=app 2>/dev/null || true)
+  c=${c%%$'\n'*}
+  port=""; ip=""
+  if [ -n "$c" ]; then
+    port=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostPort}}{{end}}' "$c" 2>/dev/null || true)
+    ip=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostIp}}{{end}}' "$c" 2>/dev/null || true)
+  fi
+  if [ -n "$port" ]; then
+    # leere HostIp heisst: auf allen Adressen (so war es bisher erreichbar)
+    printf 'COMPOSE_FILE=docker-compose.yml:compose.port.yml\nRD_PORT=%s\nRD_BIND=%s\n' "$port" "${ip:-0.0.0.0}" >> .env
+    WEG_GERETTET="Port ${ip:-0.0.0.0}:$port"; return 0
+  fi
+  for alt in $(ls -1d .sicherung/*/ 2>/dev/null | sort -r); do
+    if grep -q '^COMPOSE_FILE=' "${alt}.env" 2>/dev/null; then
+      grep -E '^(COMPOSE_FILE|RD_PORT|RD_BIND|RD_PROXY_DOMAIN)=' "${alt}.env" >> .env || true
+      WEG_GERETTET="Sicherung ${alt%/}"; return 0
+    fi
+  done
+  return 0
+}
+weg_retten
+[ -n "$WEG_GERETTET" ] && say "==> Die .env kannte keinen Weg nach außen — vom laufenden RedDrop übernommen ($WEG_GERETTET)" "==> .env had no way in — taken over from the running RedDrop ($WEG_GERETTET)"
+
+# 4. Weg nach aussen festlegen — nur, solange die .env noch keinen kennt
+if ! grep -q '^COMPOSE_FILE=' .env; then
+  # Bestehende Installation mit altem Compose (Caddy stand noch in docker-compose.yml): Caddy behalten.
+  if [ -z "$MODUS" ] && docker ps --filter "label=com.docker.compose.service=caddy" --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null | grep -qx "$PWD"; then
+    MODUS="caddy"
+  fi
+  if [ -z "$MODUS" ]; then
+    if belegt 80 || belegt 443; then
+      server=$(wer_lauscht 80 || true); [ -n "$server" ] || server=$(wer_lauscht 443 || true)
+      echo ""
+      say "==> Port 80/443 sind schon belegt (${server:-unbekannter Dienst})." "==> Port 80/443 are already in use (${server:-unknown service})."
+      say "    RedDrop bekommt dann einen eigenen Port auf 127.0.0.1, und dein Webserver" "    RedDrop then gets its own port on 127.0.0.1, and your web server"
+      say "    leitet die Domain dorthin weiter (Virtual Host, HTTPS ueber deinen Webserver)." "    forwards the domain to it (virtual host, HTTPS via your web server)."
+      if ja "    $(s "So einrichten? Bei Nein versucht Caddy, Port 80/443 selbst zu belegen." "Set it up this way? If not, Caddy tries to take port 80/443 itself.")" "j"; then MODUS="port"; else MODUS="caddy"; fi
+    else
+      MODUS="caddy"
+    fi
+  fi
+
+  if [ "$MODUS" = "port" ]; then
+    if [ -z "$PORT" ]; then
+      for p in 8080 8081 8082 8088 8090 8100 8180 8280 3100 3200 9080; do belegt "$p" || { PORT=$p; break; }; done
+      [ -n "$PORT" ] || { say "FEHLER: kein freier Port gefunden. Bitte mit --port angeben." "ERROR: no free port found. Please pass one with --port."; exit 1; }
+      PORT=$(frage "    $(s "Port fuer RedDrop (frei)" "Port for RedDrop (free)")" "$PORT")
+    fi
+    belegt "$PORT" && { say "FEHLER: Port $PORT ist belegt." "ERROR: port $PORT is in use."; exit 1; }
+    [ -n "$DOMAIN" ] || DOMAIN=$(frage "    $(s "Domain, unter der das Panel laufen soll (leer = spaeter)" "Domain for the panel (empty = later)")" "")
+    DOMAIN="${DOMAIN,,}"
+    {
+      echo "COMPOSE_FILE=docker-compose.yml:compose.port.yml"
+      echo "RD_PORT=$PORT"
+      echo "RD_BIND=127.0.0.1"
+      echo "RD_PROXY_DOMAIN=$DOMAIN"
+    } >> .env
+    say "==> App hoert auf 127.0.0.1:$PORT (ohne eigenen Caddy)" "==> App listens on 127.0.0.1:$PORT (without its own Caddy)"
+  else
+    echo "COMPOSE_FILE=docker-compose.yml:compose.caddy.yml" >> .env
+    say "==> Caddy uebernimmt Port 80/443 und holt das Zertifikat selbst" "==> Caddy takes port 80/443 and gets the certificate by itself"
+  fi
+fi
+WEG_FERTIG=1
+# 4b. Virenscan (ClamAV als eigener Container) — einmal fragen, danach im Panel umschaltbar
+profil_setzen() { # profil_setzen an|aus  → COMPOSE_PROFILES in der .env um "virenscan" ergaenzen/kuerzen
+  local p; p=$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
+  p=$(echo " $p " | sed 's/ virenscan / /g' | xargs)
+  [ "$1" = "an" ] && p=$(echo "$p virenscan" | xargs)
+  sed -i '/^COMPOSE_PROFILES=/d' .env
+  [ -z "$p" ] || echo "COMPOSE_PROFILES=$(echo "$p" | tr ' ' ',')" >> .env
+}
+if [ -n "$VS" ]; then
+  profil_setzen "$([ "$VS" = "ja" ] && echo an || echo aus)"; grep -q '^RD_VIRENSCAN_GEFRAGT=' .env || echo "RD_VIRENSCAN_GEFRAGT=1" >> .env
+elif ! grep -q '^RD_VIRENSCAN_GEFRAGT=' .env; then
+  echo ""
+  say "==> Virenscan: ClamAV prueft jede hochgeladene Datei, Funde kommen in Quarantaene." "==> Virus scan: ClamAV checks every uploaded file, findings are quarantined."
+  say "    Braucht etwa 1,5 GB Arbeitsspeicher (dieser Server: ${ram_mb} MB). Spaeter im Panel umschaltbar." "    Needs about 1.5 GB of RAM (this server: ${ram_mb} MB). Can be switched later in the panel."
+  if [ "$ram_mb" -ge 3000 ]; then vs_vorgabe="j"; else vs_vorgabe="n"; fi
+  if ja "    $(s "Virenscan einschalten?" "Turn on the virus scan?")" "$vs_vorgabe"; then profil_setzen an; else profil_setzen aus; fi
+  echo "RD_VIRENSCAN_GEFRAGT=1" >> .env
+fi
+
+# Werte aus der .env (auch bei einem zweiten Aufruf)
+PORT=$(sed -n 's/^RD_PORT=//p' .env | tail -1)
+[ -n "$DOMAIN" ] || DOMAIN=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env | tail -1)
+grep -q 'compose.port.yml' .env && MODUS="port" || MODUS="caddy"
+# --domain beim zweiten Aufruf: in der .env nachtragen, damit der Assistent sie vorwaehlt
+if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ]; then
+  [[ "$DOMAIN" =~ ^[a-z0-9.-]+$ ]] || { say "FEHLER: ungueltige Domain: $DOMAIN" "ERROR: invalid domain: $DOMAIN"; exit 1; }
+  if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
+fi
+
+# Passt das Datenbank-Passwort der .env nicht mehr zur Datenbank (.env neu angelegt, das Daten-Volume ist aber das
+# alte — etwa nach einem Unraid-Neustart oder einer zweiten Installation), kommt die App nie an ihre Daten (502).
+# Im Datenbank-Container geht der lokale Socket ohne Passwort: darueber das Passwort der .env setzen, Daten bleiben.
+# Geprueft wird ueber die Netz-Adresse des Containers (wie die App) — 127.0.0.1 ist dort ohne Passwort erlaubt.
+# Rueckgabe: 0 = passt, 2 = angeglichen (App neu gestartet), 1 = liess sich nicht angleichen
+db_passwort_angleichen() {
+  local i
+  [ -n "$(docker compose ps -q db 2>/dev/null)" ] || return 0
+  for i in $(seq 1 30); do docker compose exec -T db pg_isready -q >/dev/null 2>&1 && break; sleep 1; done
+  docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$(hostname -i 2>/dev/null | cut -d" " -f1)" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select 1"' >/dev/null 2>&1 && return 0
+  printf '%s\n' "ALTER USER CURRENT_USER PASSWORD :'pw';" | docker compose exec -T db sh -c 'psql -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD"' >/dev/null 2>&1 || return 1
+  docker compose exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$(hostname -i 2>/dev/null | cut -d" " -f1)" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select 1"' >/dev/null 2>&1 || return 1
+  docker compose restart app >/dev/null 2>&1 || true
+  return 2
+}
+
+# 5. Starten
+# Ordner fuer Importe (Seite „Import“ → Server-Ordner), lesbar fuer den App-Nutzer (uid 1000)
+mkdir -p import && chmod 755 import
+if [ -d .output ]; then docker compose up -d --build; else docker compose pull && docker compose up -d; fi
+db_rc=0; db_passwort_angleichen || db_rc=$?
+if [ "$db_rc" = 2 ]; then say "    Das Datenbank-Passwort passte nicht zur .env — angeglichen (Daten bleiben)." "    The database password did not match .env — fixed (data kept)."
+elif [ "$db_rc" = 1 ]; then say "    FEHLER: Das Datenbank-Passwort passt nicht zur .env und liess sich nicht angleichen." "    ERROR: The database password does not match .env and could not be fixed."; fi
+
+# 5b. Update-Dienst einrichten (Funktion steht oben)
+updater_einrichten || say "    Update-Dienst nicht eingerichtet: $DIENST_GRUND" "    Update service not set up: $DIENST_GRUND"
+
+# 6. + 7. Virtual Host und Zertifikat (Funktionen oben, auch fuer --nur-vhost)
 vhost_einrichten
 
 # 8. Auf die App warten und den Setup-Code zeigen

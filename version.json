@@ -1,14 +1,14 @@
 {
-  "version": "1.5.3",
+  "version": "1.5.4",
   "datum": "2026-10-31",
   "hinweise": {
     "de": [
-      "Wichtige Fehlerbehebung: RedDrop konnte nach längerer Laufzeit komplett hängen bleiben (Fehler 504 über Proxy oder Tunnel), bis zum Neustart. Ursache waren gleichzeitig laufende Hintergrund-Aufgaben, die sich gegenseitig die Datenbank-Verbindungen blockierten — jetzt behoben.",
-      "Wartet eine Anfrage zu lange auf die Datenbank, bekommt sie jetzt nach 20 Sekunden eine Fehlermeldung, statt endlos zu hängen"
+      "Einrichtung hinter eigenem Webserver: Der Assistent erkennt jetzt, wenn die Installation ohne eigenen Caddy läuft, und bietet „Eigene Domain“ dort nicht mehr an (das konnte nie funktionieren). Stattdessen richtet er nginx oder Apache samt Virtual Host, HTTPS (Let’s Encrypt) und HSTS auf Knopfdruck selbst ein — mit Live-Protokoll.",
+      "Sicherheit: Der Update-Dienst auf dem Server schreibt Status- und Protokolldateien jetzt so, dass ihm keine untergeschobene Verknüpfung aus dem RedDrop-Container mehr Dateien auf dem Server überschreiben lassen kann. Bitte zeitnah aktualisieren."
     ],
     "en": [
-      "Important fix: after running for a while RedDrop could hang completely (error 504 via proxy or tunnel) until restarted. Background tasks running at the same time blocked each other’s database connections — fixed now.",
-      "A request that waits too long for the database now gets an error after 20 seconds instead of hanging forever"
+      "Setup behind your own web server: the wizard now detects installations without their own Caddy and no longer offers “Own domain” there (it could never work). Instead it sets up nginx or Apache including the virtual host, HTTPS (Let’s Encrypt) and HSTS with one click — with a live log.",
+      "Security: the update service on the server now writes its status and log files so that a planted link from the RedDrop container can no longer make it overwrite files on the server. Please update soon."
     ]
   }
 }
