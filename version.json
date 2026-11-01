@@ -1,12 +1,14 @@
 {
-  "version": "1.6.1",
+  "version": "1.6.2",
   "datum": "2026-11-01",
   "hinweise": {
     "de": [
-      "Behoben: Direktlinks zu Videos, Audio und PDF liefen im Browser nicht mehr. Das Video blieb schwarz, die PDF-Ansicht leer. Bilder liefen, meldeten aber Fehler in der Konsole. HTML, SVG und andere Dateien bleiben weiter abgeschottet."
+      "Neues Auswahlmenü überall: Die Listen des Browsers sind ersetzt. Es sieht in hell und dunkel gleich aus und lässt sich mit Maus und Tastatur bedienen.",
+      "Behoben: Die Einrichtung des Webservers brach ab, wenn nginx gerade nicht lief."
     ],
     "en": [
-      "Fixed: direct links to videos, audio and PDFs no longer played in the browser. The video stayed black, the PDF view empty. Images worked but logged console errors. HTML, SVG and other files stay isolated as before."
+      "New selection menu everywhere: the browser's own lists are gone. It looks the same in light and dark and works with mouse and keyboard.",
+      "Fixed: web server setup failed when nginx was not running."
     ]
   }
 }
