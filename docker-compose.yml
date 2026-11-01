@@ -16,6 +16,12 @@
 #
 # Cloudflare Tunnel (optional): cloudflared laeuft nur mit dem Profil "tunnel" — eingeschaltet im Panel unter
 # Einstellungen → Installation (setzt RD_TUNNEL_TOKEN + COMPOSE_PROFILES ueber den Update-Dienst).
+#
+# Speicher (optional, ab 1.6.0): Storage-Boxen (SFTP/SCP/WebDAV, SFTPGo) und S3-Buckets (Garage) laufen nur mit dem
+# Profil "speicher" — eingeschaltet im Panel unter „Speicher“ (der Update-Dienst erzeugt die Geheimnisse in der .env).
+# Beide Programme laufen unveraendert in eigenen Containern (Lizenz AGPL-3.0, Quellcode: github.com/drakkan/sftpgo,
+# git.deuxfleurs.fr/Deuxfleurs/garage). SFTP geht ueber RD_SFTP_PORT (Standard 2222), WebDAV und S3 ueber die Adresse
+# von RedDrop selbst (RedDrop reicht /webdav/ und signierte S3-Anfragen an die Container weiter).
 services:
   app:
     image: ghcr.io/theredstonee/reddrop:latest
@@ -41,8 +47,15 @@ services:
       RD_CLAMAV: ${RD_CLAMAV:-clamav:3310}
       # Cloudflare Tunnel: Status-Abfrage beim cloudflared-Container (Dienst "cloudflared" unten)
       RD_TUNNEL_METRICS: ${RD_TUNNEL_METRICS:-cloudflared:2000}
+      # Speicher (Profil "speicher"): Verwaltung von SFTPGo und Garage — leer = Speicher aus
+      RD_SFTPGO_ADMIN_PW: ${RD_SFTPGO_ADMIN_PW:-}
+      RD_GARAGE_ADMIN_TOKEN: ${RD_GARAGE_ADMIN_TOKEN:-}
+      RD_SFTP_PORT: ${RD_SFTP_PORT:-}
     volumes:
       - dateien:/data
+      # Speicher: Dateien der Storage-Boxen (dasselbe Volume wie im Dienst "sftpgo") — RedDrop legt hier nur Ordner an
+      # und raeumt geloeschte Boxen weg
+      - speicher:/speicher
       # Import (Seite „Import“ → Server-Ordner): alte Upload-Ordner von Zipline, XBackBone, Chibisafe …
       # hierhin kopieren oder verlinken. Nur lesend — RedDrop veraendert dort nichts.
       - ./import:/import:ro
@@ -89,7 +102,52 @@ services:
     depends_on:
       - app
 
+  sftpgo:
+    image: drakkan/sftpgo:v2.7.6-alpine
+    profiles: ["speicher"]
+    restart: unless-stopped
+    environment:
+      SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN: "true"
+      SFTPGO_DEFAULT_ADMIN_USERNAME: reddrop
+      SFTPGO_DEFAULT_ADMIN_PASSWORD: ${RD_SFTPGO_ADMIN_PW:-}
+      # Verwaltung nur ueber die REST-Schnittstelle im internen Netz; die Weboberflaechen von SFTPGo bleiben aus
+      SFTPGO_HTTPD__BINDINGS__0__PORT: "8080"
+      SFTPGO_HTTPD__BINDINGS__0__ENABLE_WEB_ADMIN: "false"
+      SFTPGO_HTTPD__BINDINGS__0__ENABLE_WEB_CLIENT: "false"
+      SFTPGO_HTTPD__BINDINGS__0__ENABLE_REST_API: "true"
+      # WebDAV unter /webdav/ — erreichbar nur ueber RedDrop (das die echte Adresse in X-Forwarded-For mitgibt)
+      SFTPGO_WEBDAVD__BINDINGS__0__PORT: "8090"
+      SFTPGO_WEBDAVD__BINDINGS__0__PREFIX: /webdav
+      SFTPGO_WEBDAVD__BINDINGS__0__PROXY_ALLOWED: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      SFTPGO_WEBDAVD__BINDINGS__0__CLIENT_IP_PROXY_HEADER: X-Forwarded-For
+      SFTPGO_SFTPD__BINDINGS__0__PORT: "2022"
+      SFTPGO_COMMON__DEFENDER__ENABLED: "true"
+    volumes:
+      - speicher:/srv/sftpgo/data
+      - sftpgo:/var/lib/sftpgo
+    ports:
+      - "${RD_SFTP_PORT:-2222}:2022"
+    expose: ["8080", "8090"]
+
+  garage:
+    image: dxflrs/garage:v2.5.0
+    profiles: ["speicher"]
+    restart: unless-stopped
+    command: ["/garage", "server", "--single-node"]
+    environment:
+      GARAGE_RPC_SECRET: ${RD_GARAGE_RPC_SECRET:-}
+      GARAGE_ADMIN_TOKEN: ${RD_GARAGE_ADMIN_TOKEN:-}
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-daten:/var/lib/garage/data
+    expose: ["3900", "3903"]
+
 volumes:
   db:
   dateien:
   clamav:
+  speicher:
+  sftpgo:
+  garage-meta:
+  garage-daten:

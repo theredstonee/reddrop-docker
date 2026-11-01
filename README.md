@@ -34,6 +34,7 @@ By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** f�
   - **Hotlink-Schutz:** Direktlinks und Vorschaubilder nur auf erlaubten Websites einbinden; die eigene Domain ist immer erlaubt, Downloads bleiben offen.
 - **Speicher-Regeln:** alte oder lange nicht angesehene Dateien räumen sich von selbst auf — in den Papierkorb, endgültig oder (mit S3) ausgelagert. Mit Vorschau, wie viele Dateien eine Regel trifft.
 - **Datei-Anfragen:** Andere laden über einen Link Dateien zu dir hoch, auch ohne Konto.
+- **Speicher-Anbieter** (optional, kostenlos): **Storage-Boxen** mit Zugang per SFTP, SCP und WebDAV — samt Unterkonten mit eigenem Ordner — und **S3-kompatible Buckets** mit Zugangsschlüsseln für rclone, restic, aws-cli und eigene Apps. Feste Kontingente, Belegung mit Verlauf, Warnung bei 80 %.
 - **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur, Google Fotos (Takeout), iCloud (Fotos und Drive) und Tiny File Manager (Webordner samt Konten aus der `config.php`). Mit dabei sind:
   - Konten samt Passwörtern, Ordner und Tags
   - alte Linknamen; alte Pfade wie `/u/abc.png` leiten auf die neue Datei weiter
@@ -79,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/in
 ```
 
 Das Skript erledigt Folgendes:
-- legt alles nach **`/opt/reddrop`** (anderer Ordner: `curl … | sudo RD_DIR=/srv/reddrop bash`; auf **Unraid** nach `/mnt/user/appdata/reddrop`, weil dort alles außerhalb von `/boot` und `/mnt` nach einem Neustart weg ist — eine bestehende Installation in `/opt` zieht beim nächsten Update von selbst um)
+- legt alles nach **`/opt/reddrop`** (anderer Ordner: `curl … | sudo RD_DIR=/srv/reddrop bash`)
 - installiert Docker, falls nötig
 - erzeugt ein Datenbank-Passwort und startet alles
 - zeigt am Ende die Adresse und den **Setup-Code**
@@ -134,6 +135,18 @@ Für Heimserver oder Server hinter einer Firewall: RedDrop baut über einen eige
 - **Automatisch:** ein Cloudflare-API-Token mit den Rechten „Account → Cloudflare Tunnel → Edit“ und „Zone → DNS → Edit“ einfügen — RedDrop legt Tunnel, Weiterleitung und DNS-Eintrag selbst an und räumt sie auf Wunsch wieder ab.
 
 Der Schalter braucht den Update-Dienst auf dem Server (einmal `sudo bash install.sh` bei älteren Installationen).
+
+### Speicher (Storage-Boxen und S3-Buckets)
+
+RedDrop kann selbst Speicher anbieten — wie eine Storage-Box bzw. ein Object Storage bei einem Hoster, nur auf deinem Server. Eingeschaltet wird das im Panel unter **Speicher** (nur der Inhaber): RedDrop startet dafür zwei kleine Zusatz-Container, [SFTPGo](https://github.com/drakkan/sftpgo) für SFTP/SCP/WebDAV und [Garage](https://git.deuxfleurs.fr/Deuxfleurs/garage) für S3 (zusammen rund 30 MB Arbeitsspeicher). Beide laufen unverändert unter ihrer eigenen Lizenz (AGPL-3.0).
+
+- **Storage-Box:** eigener Login (z. B. `rd482913`), Passwort oder SSH-Schlüssel, festes Kontingent. Zugang per **SFTP/SCP** über einen eigenen Port (Standard `2222`, beim Einschalten wählbar; ufw/firewalld öffnet RedDrop selbst) und per **WebDAV** unter `https://deine-domain/webdav/` (Netzlaufwerk in Windows und macOS).
+- **Unterkonten:** eigener Login nur für einen Unterordner der Box, nur lesen oder lesen und schreiben. Sie teilen sich das Kontingent der Box.
+- **Bucket:** S3-kompatibel unter der Adresse von RedDrop (`https://deine-domain`, Region `garage`, **Path-Style**). Zugangsschlüssel je Bucket, lesend oder schreibend; das Secret wird nur beim Anlegen gezeigt.
+- **Kontingente** setzen SFTPGo und Garage hart durch. RedDrop misst die Belegung stündlich (Verlauf 7/30/90 Tage) und warnt bei 80 % und bei vollem Kontingent.
+- **Wer darf?** Standardmäßig legen nur Admins Speicher an. Der Inhaber kann es für alle Konten freigeben, mit Grenzen für Größe und Anzahl.
+
+Beim Ausschalten bleiben alle Boxen, Buckets und Dateien erhalten (Volumes `speicher`, `sftpgo`, `garage-meta`, `garage-daten`). Hinweise: SFTP geht nicht über einen Cloudflare Tunnel (der leitet nur HTTP weiter) — WebDAV und S3 schon. Garage hält auf einem einzelnen Server keine zweite Kopie: für wichtige Daten eigene Backups machen. Der Schalter braucht den Update-Dienst auf dem Server (bei älteren Installationen einmal `update.sh` ausführen).
 
 ### Virenscan
 
@@ -239,6 +252,7 @@ Stoppt und entfernt die Container und die Webserver-Einträge von RedDrop (gesic
 **Ohne Pro, von Hand:**
 - **Datenbank:** `docker compose exec db pg_dump -U reddrop reddrop > reddrop.sql`
 - **Dateien:** das Volume `dateien` (im Container `/data`), bei S3 der Bucket.
+- **Speicher (Boxen/Buckets):** die Volumes `speicher` (Box-Dateien), `garage-meta` und `garage-daten` (Buckets) — sie sind nicht Teil der Sicherung im Panel.
 
 ## Hilfe
 

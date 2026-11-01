@@ -13,7 +13,7 @@ set -uo pipefail
 exec </dev/null
 # RD_QUELLE nur fuer Tests (eigener Dateiserver statt GitHub)
 QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"
-DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile install.sh update.sh .env.example README.md version.json"
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
 DIR="${RD_DIR:-}"; STATUS=""
 while [ $# -gt 0 ]; do
   case "$1" in

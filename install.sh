@@ -23,7 +23,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash
 set -euo pipefail
 QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"   # RD_QUELLE nur fuer Tests
-DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile install.sh update.sh .env.example README.md version.json"
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
 # Unraid: ausser /boot (USB-Stick) und /mnt (Array/Cache) liegt alles im Arbeitsspeicher — nach einem Neustart waeren
 # Compose-Dateien und .env weg (die Datenbank im Docker-Volume bleibt, passt dann aber nicht mehr zu einer neuen .env).
 # Darum gehoert die Installation dort nach /mnt/user/appdata/<Ordnername>: gleicher Name → gleicher Compose-Projektname
@@ -364,6 +364,8 @@ tok=\$(printf '%s' "\$anfrage" | sed -n 's#.*"token":"\([A-Za-z0-9+/=_-]*\)".*#\
 art=\$(printf '%s' "\$anfrage" | sed -n 's/.*"art":"\([a-z]*\)".*/\1/p' | head -c 10)
 dom=\$(printf '%s' "\$anfrage" | sed -n 's/.*"domain":"\([a-z0-9.-]*\)".*/\1/p' | head -c 300)
 jid=\$(printf '%s' "\$anfrage" | sed -n 's/.*"id":"\([a-f0-9]*\)".*/\1/p' | head -c 32)
+# Speicher: Port fuer SFTP (nur Ziffern, unten noch einmal auf 1–65535 geprueft)
+prt=\$(printf '%s' "\$anfrage" | sed -n 's/.*"port":"\([0-9]*\)".*/\1/p' | head -c 5)
 status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" | ablegen "\$DATEN/\$1"; }
 kurz() { echo "\$1" | tail -3 | tr '\n"\\\\' '   '; }
 $(declare -f ws_info)
@@ -394,6 +396,30 @@ case "\${aktion:-update}" in
     status .tunnel-status laeuft ""
     if out=\$(docker compose stop cloudflared 2>&1 && docker compose rm -f cloudflared 2>&1); then profil aus tunnel; sed -i '/^RD_TUNNEL_TOKEN=/d' .env; status .tunnel-status fertig ""
     else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
+  speicher-an)
+    # Storage-Boxen (SFTPGo) + S3-Buckets (Garage): Geheimnisse einmal erzeugen (bleiben beim Aus-/Einschalten gleich),
+    # SFTP-Port setzen, Profil an, Container starten. Die App wird mit neu erstellt (neue Umgebung).
+    status .speicher-status laeuft ""
+    if ! [[ "\$prt" =~ ^[0-9]{1,5}\$ ]] || [ "\$prt" -lt 1 ] || [ "\$prt" -gt 65535 ] || [ "\$prt" = 80 ] || [ "\$prt" = 443 ]; then status .speicher-status fehler "Ungueltiger Port fuer SFTP"; exit 1; fi
+    alt_prt=\$(sed -n 's/^RD_SFTP_PORT=//p' .env | tail -1)
+    if [ "\$prt" != "\$alt_prt" ] && command -v ss >/dev/null 2>&1 && ss -ltnH "sport = :\$prt" 2>/dev/null | grep -q .; then status .speicher-status fehler "Port \$prt ist auf dem Server schon belegt"; exit 1; fi
+    neu_geheim() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+    for v in RD_GARAGE_RPC_SECRET RD_GARAGE_ADMIN_TOKEN RD_SFTPGO_ADMIN_PW; do grep -q "^\$v=." .env || echo "\$v=\$(neu_geheim)" >> .env; done
+    sed -i '/^RD_SFTP_PORT=/d' .env; echo "RD_SFTP_PORT=\$prt" >> .env; chmod 600 .env
+    [ -f garage.toml ] || curl -fsSL --max-time 30 -o garage.toml "\$QUELLE/garage.toml" 2>/dev/null || { status .speicher-status fehler "garage.toml liess sich nicht laden"; exit 1; }
+    if ! grep -q 'sftpgo:' docker-compose.yml; then
+      curl -fsSL --max-time 30 -o docker-compose.yml.neu "\$QUELLE/docker-compose.yml" 2>/dev/null && grep -q 'sftpgo:' docker-compose.yml.neu && mv -f docker-compose.yml.neu docker-compose.yml || { rm -f docker-compose.yml.neu; status .speicher-status fehler "docker-compose.yml ohne Speicher-Dienste (bitte update.sh ausfuehren)"; exit 1; }
+    fi
+    profil an speicher
+    # Firewall: nur den SFTP-Port oeffnen (WebDAV und S3 laufen ueber die Adresse von RedDrop)
+    if command -v ufw >/dev/null 2>&1; then case "\$(ufw status 2>/dev/null || true)" in *"Status: active"*) ufw allow "\$prt"/tcp >/dev/null 2>&1 || true ;; esac
+    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then { firewall-cmd -q --permanent --add-port="\$prt"/tcp && firewall-cmd -q --reload; } >/dev/null 2>&1 || true; fi
+    if out=\$(docker compose up -d sftpgo garage app 2>&1); then status .speicher-status fertig ""; else status .speicher-status fehler "\$(kurz "\$out")"; fi ;;
+  speicher-aus)
+    # Container stoppen, Daten und Geheimnisse bleiben (Volumes speicher, sftpgo, garage-*) — wieder einschalten = alles da
+    status .speicher-status laeuft ""
+    if out=\$(docker compose stop sftpgo garage 2>&1 && docker compose rm -f sftpgo garage 2>&1); then profil aus speicher; status .speicher-status fertig ""
+    else status .speicher-status fehler "\$(kurz "\$out")"; fi ;;
   webserver-info) ws_info_schreiben ;;
   webserver)
     # Assistent: Webserver (falls keiner da) + Virtual Host + HTTPS — mit install.sh --nur-vhost, also denselben
@@ -429,7 +455,7 @@ case "\${aktion:-update}" in
     fi
     rm -f "\$neu"
     # GitHub nicht erreichbar: wie bisher nur die Images
-    dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="\$dienste clamav"; grep -q '^COMPOSE_PROFILES=.*tunnel' .env && dienste="\$dienste cloudflared"
+    dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="\$dienste clamav"; grep -q '^COMPOSE_PROFILES=.*tunnel' .env && dienste="\$dienste cloudflared"; grep -q '^COMPOSE_PROFILES=.*speicher' .env && dienste="\$dienste sftpgo garage"
     if out=\$(docker compose pull \$dienste 2>&1 && docker compose up -d \$dienste 2>&1); then status .update-status fertig ""
     else status .update-status fehler "\$(kurz "\$out")"; fi ;;
 esac
@@ -473,7 +499,7 @@ SKRIPT
     chmod 644 /etc/cron.d/reddrop-update; ausloeser="cron"
   fi
   [ -n "$ausloeser" ] || { DIENST_GRUND="$(s "Weder systemd noch cron laufen auf diesem Server – ohne einen davon kann der Knopf im Panel nichts ausloesen." "Neither systemd nor cron is running on this server – without one the panel button cannot trigger anything.")"; return 1; }
-  printf '%s\naktionen=update virenscan tunnel webserver\nstand=3\n' "$PWD" | ablegen "$daten/.updater" || { DIENST_GRUND="$(s "Die Marker-Datei $daten/.updater liess sich nicht anlegen (Datenordner kein echter Ordner?)." "Could not create the marker file $daten/.updater (data folder not a real folder?).")"; return 1; }
+  printf '%s\naktionen=update virenscan tunnel webserver speicher\nstand=4\n' "$PWD" | ablegen "$daten/.updater" || { DIENST_GRUND="$(s "Die Marker-Datei $daten/.updater liess sich nicht anlegen (Datenordner kein echter Ordner?)." "Could not create the marker file $daten/.updater (data folder not a real folder?).")"; return 1; }
   # gleich einmal fuer den Assistenten festhalten, welcher Webserver da ist (spaeter frisch per Aktion „webserver-info“)
   { ws_info | ablegen "$daten/.webserver-info"; } 2>/dev/null || true
   say "==> Update-Dienst eingerichtet ($ausloeser; Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up ($ausloeser; panel → version at the bottom left → “Update now”)"

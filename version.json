@@ -1,14 +1,22 @@
 {
-  "version": "1.5.4",
-  "datum": "2026-10-31",
+  "version": "1.6.0",
+  "datum": "2026-11-01",
   "hinweise": {
     "de": [
-      "Einrichtung hinter eigenem Webserver: Der Assistent erkennt jetzt, wenn die Installation ohne eigenen Caddy läuft, und bietet „Eigene Domain“ dort nicht mehr an (das konnte nie funktionieren). Stattdessen richtet er nginx oder Apache samt Virtual Host, HTTPS (Let’s Encrypt) und HSTS auf Knopfdruck selbst ein — mit Live-Protokoll.",
-      "Sicherheit: Der Update-Dienst auf dem Server schreibt Status- und Protokolldateien jetzt so, dass ihm keine untergeschobene Verknüpfung aus dem RedDrop-Container mehr Dateien auf dem Server überschreiben lassen kann. Bitte zeitnah aktualisieren."
+      "Neu: Speicher — RedDrop wird zum eigenen Speicher-Anbieter. Storage-Boxen mit Zugang per SFTP, SCP und WebDAV (als Netzlaufwerk in Windows und macOS) und S3-kompatible Buckets mit Zugangsschlüsseln für rclone, restic, aws-cli und eigene Apps. Kostenlos.",
+      "Jede Box und jeder Bucket hat ein festes Kontingent, das hart durchgesetzt wird, dazu Belegung mit Verlauf über 7, 30 oder 90 Tage und eine Warnung bei 80 % und bei vollem Kontingent.",
+      "Unterkonten für Storage-Boxen: eigener Login mit eigenem Ordner, nur lesen oder lesen und schreiben — ideal für Backup-Programme, ein NAS oder Kolleginnen und Kollegen.",
+      "WebDAV und S3 laufen über die normale Adresse von RedDrop, SFTP über einen eigenen Port. Eingeschaltet wird der Speicher im Panel unter „Speicher“; dafür startet RedDrop zwei kleine Zusatz-Container (SFTPGo und Garage, zusammen rund 30 MB Arbeitsspeicher).",
+      "Der Inhaber legt fest, ob nur Admins oder alle Konten Speicher anlegen dürfen und wie viel ein Konto bekommt.",
+      "Bestehende Installationen: einmal update.sh ausführen, damit der Dienst auf dem Server den Speicher einschalten kann."
     ],
     "en": [
-      "Setup behind your own web server: the wizard now detects installations without their own Caddy and no longer offers “Own domain” there (it could never work). Instead it sets up nginx or Apache including the virtual host, HTTPS (Let’s Encrypt) and HSTS with one click — with a live log.",
-      "Security: the update service on the server now writes its status and log files so that a planted link from the RedDrop container can no longer make it overwrite files on the server. Please update soon."
+      "New: Storage — RedDrop becomes your own storage provider. Storage boxes with SFTP, SCP and WebDAV access (as a network drive in Windows and macOS) and S3-compatible buckets with access keys for rclone, restic, aws-cli and your own apps. Free.",
+      "Every box and bucket has a fixed quota that is strictly enforced, plus usage with a 7, 30 or 90 day history and a warning at 80% and when the quota is full.",
+      "Sub-accounts for storage boxes: own login with its own folder, read only or read and write — ideal for backup programs, a NAS or colleagues.",
+      "WebDAV and S3 use RedDrop’s normal address, SFTP has its own port. Switch storage on in the panel under “Storage”; RedDrop then starts two small extra containers (SFTPGo and Garage, about 30 MB of memory together).",
+      "The owner decides whether only admins or all accounts may create storage and how much an account gets.",
+      "Existing installations: run update.sh once so the service on the server can switch storage on."
     ]
   }
 }
