@@ -33,7 +33,7 @@ By [TheRedStonee](https://www.theredstonee.de/) · kostenlos nutzbar, **Pro** f�
   - **Bilder per URL anpassen:** `…/r/bild.png?w=800&h=600&fit=cover&format=webp&q=80` — Größe, Zuschnitt, Format (WebP, AVIF, JPEG, PNG oder `auto` = bestes, das der Browser kann) und Qualität. Jede Variante entsteht einmal und wird zwischengespeichert.
   - **Hotlink-Schutz:** Direktlinks und Vorschaubilder nur auf erlaubten Websites einbinden; die eigene Domain ist immer erlaubt, Downloads bleiben offen.
 - **Speicher-Regeln:** alte oder lange nicht angesehene Dateien räumen sich von selbst auf — in den Papierkorb, endgültig oder (mit S3) ausgelagert. Mit Vorschau, wie viele Dateien eine Regel trifft.
-- **Datei-Anfragen:** Andere laden über einen Link Dateien zu dir hoch, auch ohne Konto.
+- **Datei-Anfragen:** Andere laden über einen Link Dateien zu dir hoch, auch ohne Konto, und nehmen auf Wunsch Sprachnachrichten oder Videobotschaften direkt im Browser auf (nur über HTTPS).
 - **Speicher-Anbieter** (optional, kostenlos): **Storage-Boxen** mit Zugang per SFTP, SCP und WebDAV — samt Unterkonten mit eigenem Ordner — und **S3-kompatible Buckets** mit Zugangsschlüsseln für rclone, restic, aws-cli und eigene Apps. Feste Kontingente, Belegung mit Verlauf, Warnung bei 80 %.
 - **Umzug aus anderen Diensten:** Zipline v3/v4, XBackBone, Chibisafe, ShareX-Verlauf, Imgur, Google Fotos (Takeout), iCloud (Fotos und Drive) und Tiny File Manager (Webordner samt Konten aus der `config.php`). Mit dabei sind:
   - Konten samt Passwörtern, Ordner und Tags
