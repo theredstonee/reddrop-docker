@@ -1,22 +1,12 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "datum": "2026-11-01",
   "hinweise": {
     "de": [
-      "Neu: Speicher — RedDrop wird zum eigenen Speicher-Anbieter. Storage-Boxen mit Zugang per SFTP, SCP und WebDAV (als Netzlaufwerk in Windows und macOS) und S3-kompatible Buckets mit Zugangsschlüsseln für rclone, restic, aws-cli und eigene Apps. Kostenlos.",
-      "Jede Box und jeder Bucket hat ein festes Kontingent, das hart durchgesetzt wird, dazu Belegung mit Verlauf über 7, 30 oder 90 Tage und eine Warnung bei 80 % und bei vollem Kontingent.",
-      "Unterkonten für Storage-Boxen: eigener Login mit eigenem Ordner, nur lesen oder lesen und schreiben — ideal für Backup-Programme, ein NAS oder Kolleginnen und Kollegen.",
-      "WebDAV und S3 laufen über die normale Adresse von RedDrop, SFTP über einen eigenen Port. Eingeschaltet wird der Speicher im Panel unter „Speicher“; dafür startet RedDrop zwei kleine Zusatz-Container (SFTPGo und Garage, zusammen rund 30 MB Arbeitsspeicher).",
-      "Der Inhaber legt fest, ob nur Admins oder alle Konten Speicher anlegen dürfen und wie viel ein Konto bekommt.",
-      "Bestehende Installationen: einmal update.sh ausführen, damit der Dienst auf dem Server den Speicher einschalten kann."
+      "Behoben: Direktlinks zu Videos, Audio und PDF liefen im Browser nicht mehr. Das Video blieb schwarz, die PDF-Ansicht leer. Bilder liefen, meldeten aber Fehler in der Konsole. HTML, SVG und andere Dateien bleiben weiter abgeschottet."
     ],
     "en": [
-      "New: Storage — RedDrop becomes your own storage provider. Storage boxes with SFTP, SCP and WebDAV access (as a network drive in Windows and macOS) and S3-compatible buckets with access keys for rclone, restic, aws-cli and your own apps. Free.",
-      "Every box and bucket has a fixed quota that is strictly enforced, plus usage with a 7, 30 or 90 day history and a warning at 80% and when the quota is full.",
-      "Sub-accounts for storage boxes: own login with its own folder, read only or read and write — ideal for backup programs, a NAS or colleagues.",
-      "WebDAV and S3 use RedDrop’s normal address, SFTP has its own port. Switch storage on in the panel under “Storage”; RedDrop then starts two small extra containers (SFTPGo and Garage, about 30 MB of memory together).",
-      "The owner decides whether only admins or all accounts may create storage and how much an account gets.",
-      "Existing installations: run update.sh once so the service on the server can switch storage on."
+      "Fixed: direct links to videos, audio and PDFs no longer played in the browser. The video stayed black, the PDF view empty. Images worked but logged console errors. HTML, SVG and other files stay isolated as before."
     ]
   }
 }
