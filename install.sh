@@ -1,40 +1,12 @@
 #!/usr/bin/env bash
-# RedDrop — Installation auf einem Linux-Server (Debian/Ubuntu, auch RHEL-Verwandte).
-# One-liner / Einzeiler (installs to /opt/reddrop, other folder: RD_DIR=/path):
-#   curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/install.sh | sudo bash
-# Oder im Ordner mit den Dateien:  sudo bash install.sh
-# Entfernen / Uninstall:  sudo bash /opt/reddrop/install.sh --uninstall
-#
-# Zwei Wege nach aussen, der Installer erkennt selbst, welcher passt:
-#   Caddy  — Port 80/443 sind frei: eigener Caddy mit automatischem HTTPS (Let's Encrypt).
-#   Port   — Port 80/443 sind schon belegt (nginx, Apache, Plesk …): die App bekommt einen freien
-#            Port auf 127.0.0.1, dein Webserver bekommt einen Virtual Host fuer die Domain.
-#
-# Schalter (optional):  --lang en|de  --port 8080  --domain drop.firma.de  --email du@firma.de
-#                       --caddy (Caddy erzwingen)  --no-vhost (keinen Virtual Host anlegen)
-#                       --webserver=nginx|apache|keiner (kein nginx/Apache da: diesen ohne Frage installieren,
-#                         samt Virtual Host + HTTPS per certbot; ohne Terminal und ohne Schalter nur die Vorlage)
-#                       --virenscan / --no-virenscan (ClamAV mitstarten, ~1,5 GB RAM; sonst fragt er)
-#                       --uninstall / --deinstallieren (Container, Webserver-Eintraege, auf Wunsch alle Daten)
-#                       --nur-vhost --domain d --webserver nginx|apache (nur Webserver + Virtual Host + HTTPS fuer eine
-#                         bestehende Installation im Port-Modus, ohne Fragen; ruft der Update-Dienst fuer den Assistenten auf)
-# Ein zweiter Aufruf aktualisiert nur (Image ziehen, neu starten) und fragt nichts mehr.
-# Nur aktualisieren (nichts neu einrichten, keine Fragen):
-#   curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash
 set -euo pipefail
-QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"   # RD_QUELLE nur fuer Tests
-DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
-# Unraid: ausser /boot (USB-Stick) und /mnt (Array/Cache) liegt alles im Arbeitsspeicher — nach einem Neustart waeren
-# Compose-Dateien und .env weg (die Datenbank im Docker-Volume bleibt, passt dann aber nicht mehr zu einer neuen .env).
-# Darum gehoert die Installation dort nach /mnt/user/appdata/<Ordnername>: gleicher Name → gleicher Compose-Projektname
-# → dieselben Volumes. unraid_ziel <ordner> gibt den dauerhaften Ordner aus, wenn <ordner> im Arbeitsspeicher liegt.
+QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml knoten-host.sh Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
 unraid_ziel() {
   [ -f /etc/unraid-version ] && [ -d /mnt/user ] || return 1
   case "$1" in /mnt/*|/boot/*) return 1 ;; esac
   printf '%s' "/mnt/user/appdata/$(basename "$1")"
 }
-# unraid_umziehen <alt> <neu> — Ordner kopieren, Dienst + Zeitplan auf den neuen Ordner umstellen, alten beiseitelegen.
-# Die laufenden Container bleiben, bis sie aus dem neuen Ordner neu gestartet werden (Update/Installation tun das).
 unraid_umziehen() {
   local alt="$1" neu="$2" a f
   [ -f "$alt/docker-compose.yml" ] || return 1
@@ -48,18 +20,15 @@ unraid_umziehen() {
   mv "$alt" "$alt.umgezogen-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
   return 0
 }
-# inst_suchen — vorhandene RedDrop-Installation(en) finden, auch mit anderem Ordnernamen oder an ungewoehnlichem Ort.
-# Docker Compose merkt sich den Ordner jeder Installation im Container-Label. Vorrang: laufende Installationen, dann
-# gestoppte, erst danach Ordner auf der Platte mit einer docker-compose.yml fuer unser Image. Ein Ordner pro Zeile.
-inst_echt() { # inst_echt <ordner> — nur Ordner, deren COMPOSE_FILE ausschliesslich mitgelieferte Dateien nennt (Test-/Eigenbau-Umgebungen nie uebernehmen)
+inst_echt() {
   local cf x
   cf=$(sed -n 's/^COMPOSE_FILE=//p' "$1/.env" 2>/dev/null | tail -1 | tr -d '"'"'"'\r')
   [ -n "$cf" ] || return 0
   for x in $(printf '%s' "$cf" | tr ':' ' '); do
-    case "$x" in docker-compose.yml|compose.caddy.yml|compose.port.yml|compose.node.yml) ;; *) return 1 ;; esac
+    case "$x" in docker-compose.yml|compose.caddy.yml|compose.port.yml|compose.node.yml|compose.tunnel.yml) ;; *) return 1 ;; esac
   done
 }
-inst_ordner() { # inst_ordner <docker-ps-Schalter …> — Ordner der passenden App-Container
+inst_ordner() {
   local c d img
   command -v docker >/dev/null 2>&1 || return 0
   while IFS= read -r c; do
@@ -77,11 +46,10 @@ inst_suchen() {
   while IFS= read -r f; do
     case "$f" in */.sicherung/*|*.umgezogen-*|*/.trash*) continue ;; esac
     grep -q 'theredstonee/reddrop:' "$f" 2>/dev/null || continue
-    grep -q 'theredstonee/redclub:' "$f" 2>/dev/null && continue   # RedClub mit eingebautem RedDrop
+    grep -q 'theredstonee/redclub:' "$f" 2>/dev/null && continue
     d=$(dirname "$f"); [ -f "$d/.env" ] && inst_echt "$d" && printf '%s\n' "$d"
   done < <(find /opt /srv /root /home /mnt/user/appdata /mnt/cache/appdata /docker /data -maxdepth 3 -name docker-compose.yml 2>/dev/null) | awk 'NF && !s[$0]++'
 }
-# --nur-vhost (vom Update-Dienst): nur im Ordner der Installation (RD_DIR) arbeiten — nichts suchen, umziehen oder laden
 NUR_VHOST=""
 for a in "$@"; do [ "$a" = "--nur-vhost" ] && NUR_VHOST="ja"; done
 if [ -n "$NUR_VHOST" ]; then
@@ -118,9 +86,8 @@ if [ -z "$NUR_VHOST" ] && [ -z "${RD_DIR:-}" ] && [ -f /etc/unraid-version ] && 
     fi
   fi
 fi
-# Ueber curl | bash gestartet (oder Dateien fehlen): alles nach /opt/reddrop (Unraid: /mnt/user/appdata/reddrop) holen und dort weitermachen
 if [ -n "$NUR_VHOST" ]; then
-  :   # schon oben in RD_DIR gewechselt
+  :
 elif [ -f "$0" ] && [ -f "$(dirname "$0")/docker-compose.yml" ]; then
   cd "$(dirname "$0")"
 else
@@ -128,9 +95,6 @@ else
   echo "==> RedDrop: $ZIEL"
   mkdir -p "$ZIEL" && cd "$ZIEL"
   for f in $DATEIEN; do curl -fsSL -o "$f" "$QUELLE/$f" || { [ "$f" = "version.json" ] || { echo "ERROR: $f"; exit 1; }; }; done
-  # Fragen brauchen das Terminal (stdin ist bei curl | bash die Leitung) — ohne Terminal gelten die Vorgaben
-  # Rest des Skripts aus der curl-Leitung leer lesen: exec schliesst sie sonst, waehrend curl noch schreibt
-  # (Meldung „curl: (23) Failure writing output to destination“ am Ende, obwohl alles geklappt hat)
   [ -t 0 ] || cat >/dev/null 2>&1 || true
   if { true </dev/tty; } 2>/dev/null; then exec bash ./install.sh "$@" </dev/tty; else exec bash ./install.sh "$@"; fi
 fi
@@ -144,12 +108,12 @@ while [ $# -gt 0 ]; do
     --email) EMAIL="$2"; shift 2 ;;
     --caddy) MODUS="caddy"; shift ;;
     --no-vhost) VHOST="nein"; shift ;;
-    --webserver|--webserver=*)   # kein nginx/Apache da: diesen installieren (ohne Frage)
+    --webserver|--webserver=*)
       if [ "$1" = "--webserver" ]; then WS_WAHL="${2:-}"; shift $(( $# > 1 ? 2 : 1 )); else WS_WAHL="${1#*=}"; shift; fi
       WS_WAHL="${WS_WAHL,,}"
       case "$WS_WAHL" in nginx|apache|apache2|httpd|keiner|none) ;; *) echo "--webserver: nginx | apache | keiner (none)"; exit 1 ;; esac ;;
-    --dienst) NUR_DIENST="ja"; shift ;;   # nur den Update-Dienst neu einrichten (ruft update.sh auf)
-    --nur-vhost) shift ;;                 # oben schon erkannt (NUR_VHOST)
+    --dienst) NUR_DIENST="ja"; shift ;;
+    --nur-vhost) shift ;;
     --virenscan) VS="ja"; shift ;;
     --no-virenscan) VS="nein"; shift ;;
     --deinstallieren|--uninstall) WEG="ja"; shift ;;
@@ -157,7 +121,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Aussehen: Farben nur im Terminal (RD_FARBE=1 erzwingt sie, NO_COLOR/TERM=dumb schaltet sie ab), Zeichen nur mit UTF-8
 if { [ -t 1 ] || [ -n "${RD_FARBE:-}" ]; } && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
   R=$'\033[38;2;232;48;48m'; R2=$'\033[38;2;255;110;100m'; G=$'\033[38;2;74;222;128m'; Y=$'\033[38;2;251;191;36m'
   C=$'\033[38;2;125;211;252m'; D=$'\033[2m'; B=$'\033[1m'; U=$'\033[4m'; N=$'\033[0m'
@@ -167,7 +130,6 @@ if locale charmap 2>/dev/null | grep -qi 'utf-\?8' || echo "${LANG:-}${LC_ALL:-}
 else
   Z_SCHRITT=">"; Z_OK="OK"; Z_FEHLER="X"; Z_FRAGE="?"; Z_PUNKT="-"; K_OL="+"; K_OR="+"; K_UL="+"; K_UR="+"; K_H="-"; K_V="|"; SPIN=('|' '/' '-' '\')
 fi
-# --nur-vhost schreibt ins Live-Protokoll des Assistenten: Schritte dort immer als „==> …“
 if [ -n "$NUR_VHOST" ]; then Z_SCHRITT="==>"; Z_OK="==>"; Z_FEHLER="==>"; fi
 VERSION_TXT=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1 || true)
 banner() {
@@ -182,20 +144,17 @@ banner() {
   echo "   ${D}${VERSION_TXT:+v$VERSION_TXT  ${Z_PUNKT}  }by TheRedStonee ${Z_PUNKT} https://www.theredstonee.de/reddrop/${N}"
   echo ""
 }
-# Kasten um wichtige Werte (Setup-Code, Adresse): kasten FARBE "Zeile" ["Zeile" …]
 kasten() {
   local farbe="$1"; shift
   local breit=0 z
   for z in "$@"; do [ ${#z} -gt $breit ] && breit=${#z}; done
   local linie; linie=$(printf "%$((breit + 4))s" "" | sed "s/ /${K_H}/g")
   echo "  ${farbe}${K_OL}${linie}${K_OR}${N}"
-  # von Hand auffuellen: printf zaehlt Bytes, ${#z} Zeichen (Umlaute, „·“)
   for z in "$@"; do printf '  %s%s%s  %s%s%s%*s  %s%s%s\n' "$farbe" "$K_V" "$N" "$B" "$z" "$N" $((breit - ${#z})) "" "$farbe" "$K_V" "$N"; done
   echo "  ${farbe}${K_UL}${linie}${K_UR}${N}"
 }
 [ -n "${RD_KEIN_BANNER:-}" ] || banner
 
-# Sprache: Schalter → .env → fragen (Standard Englisch)
 [ -n "$SPR" ] || SPR=$(sed -n 's/^RD_LANG=//p' .env 2>/dev/null | tail -1 || true)
 if [ "$SPR" != "de" ] && [ "$SPR" != "en" ]; then
   SPR="en"
@@ -206,8 +165,8 @@ if [ "$SPR" != "de" ] && [ "$SPR" != "en" ]; then
     case "${wahl:-1}" in 2|de|d|deutsch|Deutsch) SPR="de" ;; esac
   fi
 fi
-s() { if [ "$SPR" = "de" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }   # s "deutsch" "english"
-say() { # Meldung je Art einfaerben: „==> Fertig/Done“ gruen, „==> “ Schritt, FEHLER/ERROR rot, eingerueckt = Detail
+s() { if [ "$SPR" = "de" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+say() {
   local m; m=$(s "$1" "$2")
   m=$(printf '%s' "$m" | sed -E "s#(https?://[^ )\"']+)#${C}${U}\1${N}#g")
   case "$m" in
@@ -220,26 +179,24 @@ say() { # Meldung je Art einfaerben: „==> Fertig/Done“ gruen, „==> “ Sch
   esac
 }
 
-# Zum Testen: RD_DRY_RUN=1 zeigt Aenderungen am Webserver nur an, statt sie auszufuehren.
 tu() { if [ "${RD_DRY_RUN:-}" = "1" ]; then echo "    ($(s Probelauf "dry run")) $*"; else "$@"; fi; }
-frage() { # frage "Text" "Vorgabe" -> Antwort (ohne Terminal: Vorgabe)
+frage() {
   local antwort=""
   local text="$1"; text="${text#==> }"; text="${text#    }"
   if [ -t 0 ]; then read -r -p "  ${Y}${Z_FRAGE}${N} ${text} ${D}[$2]${N} " antwort </dev/tty || true; fi
   echo "${antwort:-$2}"
 }
-ja() { # ja "Text" "j|n" -> 0 bei ja (akzeptiert j/ja/y/yes)
+ja() {
   local vorgabe="$2" a
   [ "$SPR" = "en" ] && { [ "$vorgabe" = "j" ] && vorgabe="y"; }
   a=$(frage "$1 ($(s j/n y/n))" "$vorgabe"); case "${a,,}" in j|ja|y|yes) return 0 ;; *) return 1 ;; esac
 }
-belegt() { # lauscht etwas auf dem Port?
+belegt() {
   if command -v ss >/dev/null 2>&1; then ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
   else (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; fi
 }
 wer_lauscht() { ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*"' | head -1 | sed 's/users:(("//'; }
 
-# Deinstallieren: Container weg, Webserver-Eintraege weg (mit Backup), auf Wunsch auch alle Daten und der Ordner
 if [ -n "$WEG" ]; then
   say "==> RedDrop entfernen (Ordner: $PWD)" "==> Removing RedDrop (folder: $PWD)"
   daten="nein"
@@ -252,14 +209,12 @@ if [ -n "$WEG" ]; then
     if [ "$daten" = "ja" ]; then docker compose down -v --remove-orphans || true; else docker compose down --remove-orphans || true; fi
     docker image rm ghcr.io/theredstonee/reddrop:latest >/dev/null 2>&1 || true
   fi
-  # Update-Dienst
   rm -f /etc/cron.d/reddrop-update
   if [ -f /etc/systemd/system/reddrop-update.path ]; then
     systemctl disable --now reddrop-update.path >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/reddrop-update.path /etc/systemd/system/reddrop-update.service /usr/local/bin/reddrop-update
     systemctl daemon-reload || true
   fi
-  # Unraid: Dienst + Zeitplan auf dem USB-Stick
   if [ -d /boot/config/plugins/reddrop ]; then
     rm -rf /boot/config/plugins/reddrop /boot/config/plugins/dynamix/reddrop-update.cron /usr/local/bin/reddrop-update
     [ -x /usr/local/sbin/update_cron ] && /usr/local/sbin/update_cron >/dev/null 2>&1
@@ -293,18 +248,12 @@ if [ -n "$WEG" ]; then
   exit 0
 fi
 
-# Schreibzugriffe von root in den Datenordner der App (gehoert dem App-Nutzer im Container): nie einem Link folgen.
-# Diese drei Funktionen stehen woertlich auch im Dienst (declare -f) und in update.sh.
-# sicher_ordner <ordner> — 0, wenn <ordner> ein echter Ordner ist und kein Link (auch nicht im letzten Glied):
-# physischer Pfad == physischer Pfad des Elternordners + Name.
 sicher_ordner() {
   local d="${1%/}" p
   [ -d "$d" ] && [ ! -L "$d" ] || return 1
   p=$(cd -P "${d%/*}/" 2>/dev/null && pwd) || return 1
   [ "$(cd -P "$d" 2>/dev/null && pwd)" = "${p%/}/${d##*/}" ]
 }
-# ablegen <pfad> — stdin als <pfad> ablegen (644), ohne je einem Link zu folgen: neue Datei mit O_EXCL (set -C)
-# im Ordner selbst (cd: ein danach vertauschter Ordner aendert nichts), dann umbenennen (folgt keinem Link).
 ablegen() {
   local d="${1%/*}" n="${1##*/}"
   sicher_ordner "$d" || return 1
@@ -313,8 +262,6 @@ ablegen() {
     ( umask 022; set -C; cat > "$t" ) 2>/dev/null || exit 1
     mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; } )
 }
-# log_oeffnen <pfad> <fd> — <pfad> frisch anlegen (644) und in EINEM Schritt (O_EXCL) auf Kanal <fd> oeffnen;
-# danach nur noch ueber /dev/fd/<fd> schreiben und lesen. Beispiel:  log_oeffnen "$DATEN/.update.log" 6 && LOG=/dev/fd/6
 log_oeffnen() {
   local d="${1%/*}" n="${1##*/}" t alt="$PWD" um rc=1 c=""
   case "$2" in [3-9]) ;; *) return 1 ;; esac
@@ -324,7 +271,6 @@ log_oeffnen() {
   case "$-" in *C*) c=1 ;; esac
   set -C
   if eval "exec $2>\"\$t\"" 2>/dev/null; then rc=0; fi
-  # gleich im Anhaenge-Modus neu oeffnen — ueber den Kanal selbst (dieselbe Datei), nicht ueber den Pfad
   if [ "$rc" = 0 ]; then eval "exec $2>>/dev/fd/$2" 2>/dev/null || true; fi
   [ -n "$c" ] || set +C; umask "$um"
   if [ "$rc" = 0 ]; then mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; }; fi
@@ -332,27 +278,20 @@ log_oeffnen() {
   return "$rc"
 }
 
-# 5b. Update-Dienst: der Knopf „Jetzt aktualisieren“ im Panel legt eine Anfrage-Datei in /data ab, ein
-#     systemd-Pfad-Dienst auf dem Server zieht dann das neue Image und startet die App neu. So braucht
-#     RedDrop selbst keinen Zugriff auf Docker.
 updater_einrichten() {
   DIENST_GRUND=""
   local app daten
   app=$(docker compose ps -q app 2>/dev/null || true)
   [ -n "$app" ] || { DIENST_GRUND="$(s "Der App-Container laeuft nicht (docker compose ps app ist leer)." "The app container is not running (docker compose ps app is empty).")"; return 1; }
   daten=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$app" 2>/dev/null || true)
-  # Docker als Snap: docker inspect nennt /var/lib/docker/…, auf dem Server liegt es unter /var/snap/docker/common/var-lib-docker/…
   if [ -n "$daten" ] && [ ! -d "$daten" ] && [ -d "/var/snap/docker/common/var-lib-docker${daten#/var/lib/docker}" ]; then daten="/var/snap/docker/common/var-lib-docker${daten#/var/lib/docker}"; fi
   [ -n "$daten" ] && [ -d "$daten" ] || { DIENST_GRUND="$(s "Der Datenordner der App ($daten) ist vom Server aus nicht lesbar (Docker rootless oder in einer VM?)." "The app data folder ($daten) is not readable from the server (rootless Docker or inside a VM?).")"; return 1; }
   cat > /usr/local/bin/reddrop-update.neu <<SKRIPT
 #!/usr/bin/env bash
-# RedDrop — Update auf Anfrage aus dem Panel (angelegt von install.sh, systemd: reddrop-update.path)
 set -uo pipefail
-# cron (z. B. Unraid) startet mit sehr kurzem PATH
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\${PATH:-}"
 DIR="$PWD"; DATEN="$daten"; QUELLE="$QUELLE"
 [ -e "\$DATEN/.update-anfrage" ] || [ -L "\$DATEN/.update-anfrage" ] || exit 0
-# Der Datenordner gehoert dem App-Nutzer, dieser Dienst ist root: nie einem Link folgen (lesen wie schreiben)
 $(declare -f sicher_ordner ablegen log_oeffnen)
 sicher_ordner "\$DATEN" || exit 1
 if [ -L "\$DATEN/.update-anfrage" ] || [ ! -f "\$DATEN/.update-anfrage" ]; then rm -f "\$DATEN/.update-anfrage"; exit 0; fi
@@ -360,11 +299,9 @@ anfrage=\$(head -c 8192 "\$DATEN/.update-anfrage" 2>/dev/null)
 rm -f "\$DATEN/.update-anfrage"
 aktion=\$(printf '%s' "\$anfrage" | sed -n 's/.*"aktion":"\([a-z-]*\)".*/\1/p')
 tok=\$(printf '%s' "\$anfrage" | sed -n 's#.*"token":"\([A-Za-z0-9+/=_-]*\)".*#\1#p')
-# Webserver-Auftrag: nur Kleinbuchstaben/Ziffern/Punkt/Bindestrich kommen durch, unten noch einmal streng geprueft
 art=\$(printf '%s' "\$anfrage" | sed -n 's/.*"art":"\([a-z]*\)".*/\1/p' | head -c 10)
 dom=\$(printf '%s' "\$anfrage" | sed -n 's/.*"domain":"\([a-z0-9.-]*\)".*/\1/p' | head -c 300)
 jid=\$(printf '%s' "\$anfrage" | sed -n 's/.*"id":"\([a-f0-9]*\)".*/\1/p' | head -c 32)
-# Speicher: Port fuer SFTP (nur Ziffern, unten noch einmal auf 1–65535 geprueft)
 prt=\$(printf '%s' "\$anfrage" | sed -n 's/.*"port":"\([0-9]*\)".*/\1/p' | head -c 5)
 status() { printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "\$2" "\$(date -Is)" "\$3" | ablegen "\$DATEN/\$1"; }
 kurz() { echo "\$1" | tail -3 | tr '\n"\\\\' '   '; }
@@ -383,7 +320,6 @@ case "\${aktion:-update}" in
     status .virenscan-status laeuft ""; profil an
     if out=\$(docker compose up -d 2>&1); then status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
   virenscan-aus)
-    # Erst stoppen (solange das Profil noch aktiv ist), dann aus der .env nehmen
     status .virenscan-status laeuft ""
     if out=\$(docker compose stop clamav 2>&1 && docker compose rm -f clamav 2>&1); then profil aus; status .virenscan-status fertig ""; else status .virenscan-status fehler "\$(kurz "\$out")"; fi ;;
   tunnel-an)
@@ -397,8 +333,6 @@ case "\${aktion:-update}" in
     if out=\$(docker compose stop cloudflared 2>&1 && docker compose rm -f cloudflared 2>&1); then profil aus tunnel; sed -i '/^RD_TUNNEL_TOKEN=/d' .env; status .tunnel-status fertig ""
     else status .tunnel-status fehler "\$(kurz "\$out")"; fi ;;
   speicher-an)
-    # Storage-Boxen (SFTPGo) + S3-Buckets (Garage): Geheimnisse einmal erzeugen (bleiben beim Aus-/Einschalten gleich),
-    # SFTP-Port setzen, Profil an, Container starten. Die App wird mit neu erstellt (neue Umgebung).
     status .speicher-status laeuft ""
     if ! [[ "\$prt" =~ ^[0-9]{1,5}\$ ]] || [ "\$prt" -lt 1 ] || [ "\$prt" -gt 65535 ] || [ "\$prt" = 80 ] || [ "\$prt" = 443 ]; then status .speicher-status fehler "Ungueltiger Port fuer SFTP"; exit 1; fi
     alt_prt=\$(sed -n 's/^RD_SFTP_PORT=//p' .env | tail -1)
@@ -411,25 +345,32 @@ case "\${aktion:-update}" in
       curl -fsSL --max-time 30 -o docker-compose.yml.neu "\$QUELLE/docker-compose.yml" 2>/dev/null && grep -q 'sftpgo:' docker-compose.yml.neu && mv -f docker-compose.yml.neu docker-compose.yml || { rm -f docker-compose.yml.neu; status .speicher-status fehler "docker-compose.yml ohne Speicher-Dienste (bitte update.sh ausfuehren)"; exit 1; }
     fi
     profil an speicher
-    # Firewall: nur den SFTP-Port oeffnen (WebDAV und S3 laufen ueber die Adresse von RedDrop)
     if command -v ufw >/dev/null 2>&1; then case "\$(ufw status 2>/dev/null || true)" in *"Status: active"*) ufw allow "\$prt"/tcp >/dev/null 2>&1 || true ;; esac
     elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then { firewall-cmd -q --permanent --add-port="\$prt"/tcp && firewall-cmd -q --reload; } >/dev/null 2>&1 || true; fi
     if out=\$(docker compose up -d sftpgo garage app 2>&1); then status .speicher-status fertig ""; else status .speicher-status fehler "\$(kurz "\$out")"; fi ;;
   speicher-aus)
-    # Container stoppen, Daten und Geheimnisse bleiben (Volumes speicher, sftpgo, garage-*) — wieder einschalten = alles da
     status .speicher-status laeuft ""
     if out=\$(docker compose stop sftpgo garage 2>&1 && docker compose rm -f sftpgo garage 2>&1); then profil aus speicher; status .speicher-status fertig ""
     else status .speicher-status fehler "\$(kurz "\$out")"; fi ;;
   webserver-info) ws_info_schreiben ;;
+  knoten-vorbereiten|knoten-peer|knoten-peer-weg)
+    status .knoten-status laeuft ""
+    kpub=\$(printf '%s' "\$anfrage" | sed -n 's#.*"pub":"\([A-Za-z0-9+/=]*\)".*#\1#p' | head -c 44)
+    kip=\$(printf '%s' "\$anfrage" | sed -n 's/.*"ip":"\(10\.87\.0\.[0-9]*\)".*/\1/p' | head -c 15)
+    krolle=\$(printf '%s' "\$anfrage" | sed -n 's/.*"rolle":"\([a-z]*\)".*/\1/p' | head -c 10)
+    knfs=\$(printf '%s' "\$anfrage" | sed -n 's/.*"nfs":"\([a-z]*\)".*/\1/p' | head -c 3)
+    case "\$aktion" in
+      knoten-vorbereiten) kbef="vorbereiten \$knfs" ;;
+      knoten-peer) kbef="peer \$kpub \$kip \$krolle" ;;
+      *) kbef="peer-weg \$kip" ;;
+    esac
+    if out=\$(DATEN="\$DATEN" bash knoten-host.sh \$kbef 2>&1); then status .knoten-status fertig ""; else status .knoten-status fehler "\$(kurz "\$out")"; fi ;;
   webserver)
-    # Assistent: Webserver (falls keiner da) + Virtual Host + HTTPS — mit install.sh --nur-vhost, also denselben
-    # Funktionen wie bei der Installation. Art und Domain hier noch einmal streng pruefen (Whitelist / Regex).
     wstat() { printf '{"status":"%s","zeit":"%s","id":"%s","domain":"%s","art":"%s","https":%s,"meldung":"%s"}\n' "\$1" "\$(date -Is)" "\$jid" "\$dom" "\$art" "\${3:-false}" "\$2" | ablegen "\$DATEN/.webserver-status"; }
     re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\$'
     case "\$art" in nginx|apache) ;; *) art=""; wstat fehler "Unbekannter Webserver (nur nginx oder apache)"; exit 1 ;; esac
     if [ -z "\$dom" ] || [ \${#dom} -gt 253 ] || ! [[ "\$dom" =~ \$re ]]; then dom=""; wstat fehler "Ungueltige Domain"; exit 1; fi
     grep -q 'compose.port.yml' .env 2>/dev/null || { wstat fehler "Nur im Port-Modus (ohne eigenen Caddy) moeglich"; exit 1; }
-    # Live-Protokoll: frische Datei, gleich auf Kanal 8 geoeffnet — geschrieben und gelesen wird nur darueber
     log_oeffnen "\$DATEN/.webserver.log" 8 || { wstat fehler "Datenordner nicht beschreibbar"; exit 1; }
     wstat laeuft ""
     skript=\$(mktemp)
@@ -448,19 +389,17 @@ case "\${aktion:-update}" in
     ws_info_schreiben ;;
   *)
     status .update-status laeuft ""
-    # Erst das neueste update.sh holen: es bringt Dateien, Image und diesen Dienst selbst auf den neuesten Stand
+    if [ -f .paket ]; then status .update-status fehler "Diese Installation stammt aus einem Paket. Bitte das neue Paket einspielen (siehe LIESMICH.txt). / This installation comes from a package. Please deploy the new package (see LIESMICH.txt)."; exit 0; fi
     neu=\$(mktemp)
     if curl -fsSL --max-time 30 -o "\$neu" "\$QUELLE/update.sh?t=\$(date +%s)" 2>/dev/null && bash -n "\$neu" 2>/dev/null; then
       RD_QUELLE="\$QUELLE" exec bash "\$neu" --dir "\$DIR" --status "\$DATEN/.update-status"
     fi
     rm -f "\$neu"
-    # GitHub nicht erreichbar: wie bisher nur die Images
     dienste="app"; grep -q '^COMPOSE_PROFILES=.*virenscan' .env && dienste="\$dienste clamav"; grep -q '^COMPOSE_PROFILES=.*tunnel' .env && dienste="\$dienste cloudflared"; grep -q '^COMPOSE_PROFILES=.*speicher' .env && dienste="\$dienste sftpgo garage"
     if out=\$(docker compose pull \$dienste 2>&1 && docker compose up -d \$dienste 2>&1); then status .update-status fertig ""
     else status .update-status fehler "\$(kurz "\$out")"; fi ;;
 esac
 SKRIPT
-  # erst fertig schreiben, dann umbenennen: ein gerade laufender Dienst liest so seine alte Fassung zu Ende
   chmod 755 /usr/local/bin/reddrop-update.neu && mv -f /usr/local/bin/reddrop-update.neu /usr/local/bin/reddrop-update
   local ausloeser=""
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
@@ -468,21 +407,14 @@ SKRIPT
     printf '%s\n' "[Unit]" "Description=RedDrop aktualisieren" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-update" > /etc/systemd/system/reddrop-update.service
     if systemctl daemon-reload && systemctl enable --now reddrop-update.path >/dev/null 2>&1; then ausloeser="systemd"; rm -f /etc/cron.d/reddrop-update; fi
   fi
-  # Unraid: kein systemd, /etc und /usr/local liegen im Arbeitsspeicher (nach dem Neustart weg), und cron liest
-  # /etc/cron.d als Crontabs je Benutzer (Datei „root“, ohne Benutzerfeld) — eine eigene Datei dort laeuft nie.
-  # update_cron baut die root-Crontab aus /boot/config/plugins/dynamix/*.cron (+ Ordner installierter Plugins mit .plg)
-  # — bei jedem Start und jeder Zeitplan-Aenderung. Darum: Dienst auf den USB-Stick, Zeitplan nach dynamix/.
   if [ -z "$ausloeser" ] && [ -f /etc/unraid-version ] && [ -d /boot/config ]; then
     mkdir -p /boot/config/plugins/reddrop /boot/config/plugins/dynamix
     cp -f /usr/local/bin/reddrop-update /boot/config/plugins/reddrop/reddrop-update
     local zeile="* * * * * [ -f \"$daten/.update-anfrage\" ] && bash /boot/config/plugins/reddrop/reddrop-update >/dev/null 2>&1"
     printf '%s\n' "# RedDrop: Update-Anfrage aus dem Panel (angelegt von install.sh)" "$zeile" "" > /boot/config/plugins/dynamix/reddrop-update.cron
     rm -f /etc/cron.d/reddrop-update
-    # steht der Eintrag in der Crontab, die Unraid-cron liest? (ohne Pipe: install.sh laeuft mit pipefail)
     rd_cron_drin() { local alle; alle="$(cat /etc/cron.d/root 2>/dev/null || true)"; case "$alle" in *plugins/reddrop/reddrop-update*) return 0 ;; esac; return 1; }
-    # 1. Unraid-Weg
     if [ -x /usr/local/sbin/update_cron ]; then /usr/local/sbin/update_cron >/dev/null 2>&1 || true; fi
-    # 2. update_cron fehlt oder liest dynamix/ nicht: direkt in die root-Crontab und cron neu laden lassen
     if ! rd_cron_drin && [ -d /etc/cron.d ]; then
       { cat /etc/cron.d/root 2>/dev/null || true; echo "$zeile"; } > /tmp/reddrop-cron.$$ && cat /tmp/reddrop-cron.$$ > /etc/cron.d/root
       rm -f /tmp/reddrop-cron.$$; crontab /etc/cron.d/root -c /etc/cron.d >/dev/null 2>&1 || true
@@ -493,26 +425,19 @@ SKRIPT
       return 1
     fi
   fi
-  # Ohne systemd (z. B. Container-Server, Alpine): cron schaut jede Minute nach einer Anfrage
   if [ -z "$ausloeser" ] && [ -d /etc/cron.d ] && { pgrep -x cron >/dev/null 2>&1 || pgrep -x crond >/dev/null 2>&1; }; then
     printf '%s\n' "# RedDrop: Update-Anfrage aus dem Panel (angelegt von install.sh, ohne systemd)" "* * * * * root [ -f \"$daten/.update-anfrage\" ] && /usr/local/bin/reddrop-update >/dev/null 2>&1" > /etc/cron.d/reddrop-update
     chmod 644 /etc/cron.d/reddrop-update; ausloeser="cron"
   fi
   [ -n "$ausloeser" ] || { DIENST_GRUND="$(s "Weder systemd noch cron laufen auf diesem Server – ohne einen davon kann der Knopf im Panel nichts ausloesen." "Neither systemd nor cron is running on this server – without one the panel button cannot trigger anything.")"; return 1; }
-  printf '%s\naktionen=update virenscan tunnel webserver speicher\nstand=4\n' "$PWD" | ablegen "$daten/.updater" || { DIENST_GRUND="$(s "Die Marker-Datei $daten/.updater liess sich nicht anlegen (Datenordner kein echter Ordner?)." "Could not create the marker file $daten/.updater (data folder not a real folder?).")"; return 1; }
-  # gleich einmal fuer den Assistenten festhalten, welcher Webserver da ist (spaeter frisch per Aktion „webserver-info“)
+  printf '%s\naktionen=update virenscan tunnel webserver speicher knoten\nstand=5\n' "$PWD" | ablegen "$daten/.updater" || { DIENST_GRUND="$(s "Die Marker-Datei $daten/.updater liess sich nicht anlegen (Datenordner kein echter Ordner?)." "Could not create the marker file $daten/.updater (data folder not a real folder?).")"; return 1; }
   { ws_info | ablegen "$daten/.webserver-info"; } 2>/dev/null || true
   say "==> Update-Dienst eingerichtet ($ausloeser; Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up ($ausloeser; panel → version at the bottom left → “Update now”)"
 }
 
 
-# 6. Virtual Host fuer die Domain in deinem Webserver (nur im Port-Modus, nur mit Domain).
-#    Als Funktion: laeuft auch nach der Einrichtung ueber den Kurzzeit-Link (Schritt 9) mit der dort gewaehlten Domain.
-# Webserver selbst einrichten: Kein nginx/Apache auf dem Server (Port-Modus mit Domain) — auf Wunsch einen installieren
-#   (Frage: 1 nginx, 2 Apache, 3 keinen; oder --webserver nginx|apache). Danach geht es unten im normalen Weg weiter:
-#   Virtual Host anlegen, Konfigtest, Neuladen, Zertifikat per certbot. Ohne Terminal und ohne Schalter: nur die Vorlage.
 ws_neu=""
-ws_paket() { # ws_paket <paket …> — ueber apt-get bzw. dnf/yum installieren; Ausgabe ins Protokoll, solange ein Spinner
+ws_paket() {
   local log pid n=0 rc=0 txt
   txt="$(s "Installiere" "Installing") $*"
   log=$(mktemp "/tmp/reddrop-pakete.XXXXXX") || return 1
@@ -535,7 +460,7 @@ ws_paket() { # ws_paket <paket …> — ueber apt-get bzw. dnf/yum installieren;
   rm -f "$log"
   return "$rc"
 }
-ws_starten() { # ws_starten nginx|apache2|httpd — einschalten (startet mit dem Server) und starten; ohne systemd direkt
+ws_starten() {
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl enable "$1" >/dev/null 2>&1 || true
     systemctl restart "$1" >/dev/null 2>&1 || return 1
@@ -543,13 +468,12 @@ ws_starten() { # ws_starten nginx|apache2|httpd — einschalten (startet mit dem
     case "$1" in
       nginx) nginx -s reload >/dev/null 2>&1 || nginx || return 1 ;;
       apache2) apache2ctl start >/dev/null 2>&1 || return 1 ;;
-      # RHEL & Co.: das Platzhalter-Zertifikat von mod_ssl legt sonst httpd-init.service (systemd) an
       httpd) if [ ! -s /etc/pki/tls/certs/localhost.crt ] && [ -x /usr/libexec/httpd-ssl-gencerts ]; then /usr/libexec/httpd-ssl-gencerts >/dev/null 2>&1 || true; fi
         httpd -k start >/dev/null 2>&1 || return 1 ;;
     esac
   fi
 }
-ws_anbieten() { # fragen (oder --webserver), installieren, starten — setzt webserver und ws_neu; Rueckgabe 1 = Vorlage
+ws_anbieten() {
   local wahl="$WS_WAHL" dienst wer=""
   local -a pakete
   case "$wahl" in keiner|none) return 1 ;; esac
@@ -557,14 +481,13 @@ ws_anbieten() { # fragen (oder --webserver), installieren, starten — setzt web
     [ -z "$wahl" ] || say "    $wahl laesst sich hier nicht installieren (weder apt-get noch dnf/yum gefunden)." "    $wahl cannot be installed here (neither apt-get nor dnf/yum found)."
     return 1
   fi
-  # Port 80/443 belegt (anderer Proxy, Container …): ein zusaetzlicher Webserver kaeme nicht an die Ports
   if belegt 80 || belegt 443; then
     wer=$(wer_lauscht 80 || true); [ -n "$wer" ] || wer=$(wer_lauscht 443 || true)
     say "==> Kein nginx/Apache gefunden, aber Port 80/443 ist belegt (${wer:-unbekannter Dienst}) — einen Webserver installiere ich daneben nicht." "==> No nginx/Apache found, but port 80/443 is in use (${wer:-unknown service}) — I will not install a web server next to it."
     return 1
   fi
   if [ -z "$wahl" ]; then
-    [ -t 0 ] || return 1   # ohne Terminal (curl | bash ohne Bildschirm) und ohne --webserver: Vorlage wie bisher
+    [ -t 0 ] || return 1
     echo ""
     say "==> Auf diesem Server laeuft weder nginx noch Apache." "==> Neither nginx nor Apache is installed on this server."
     say "    Ich kann einen installieren, den Virtual Host fuer $DOMAIN anlegen und HTTPS per certbot holen." "    I can install one, create the virtual host for $DOMAIN and get HTTPS via certbot."
@@ -579,13 +502,11 @@ ws_anbieten() { # fragen (oder --webserver), installieren, starten — setzt web
   if [ "${RD_DRY_RUN:-}" = "1" ]; then tu ws_paket "${pakete[@]}"; webserver="$dienst"; ws_neu="ja"; return 0; fi
   ws_paket "${pakete[@]}" || return 1
   if [ "$dienst" = "apache2" ]; then a2enmod -q proxy proxy_http headers rewrite >/dev/null 2>&1 || true; fi
-  # RHEL & Co.: SELinux verbietet dem Webserver sonst die Verbindung zur App auf 127.0.0.1 (502)
   if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then setsebool -P httpd_can_network_connect 1 >/dev/null 2>&1 || true; fi
   if ! ws_starten "$dienst"; then
     say "    FEHLER: $dienst ist installiert, startet aber nicht (systemctl status $dienst)." "    ERROR: $dienst is installed but does not start (systemctl status $dienst)."
     return 1
   fi
-  # Firewall: nur 80/443 fuer den Webserver oeffnen — der Port der App bleibt zu (sie hoert nur auf 127.0.0.1)
   if command -v ufw >/dev/null 2>&1; then
     case "$(ufw status 2>/dev/null || true)" in *"Status: active"*)
       ufw allow 80/tcp >/dev/null 2>&1 || true; ufw allow 443/tcp >/dev/null 2>&1 || true
@@ -598,13 +519,13 @@ ws_anbieten() { # fragen (oder --webserver), installieren, starten — setzt web
   webserver="$dienst"; ws_neu="ja"
   say "==> $dienst laeuft und startet kuenftig mit dem Server." "==> $dienst is running and will start with the server."
 }
-certbot_installieren() { # certbot_installieren nginx|apache — certbot + Plugin aus der Paketverwaltung (RHEL & Co.: aus EPEL)
+certbot_installieren() {
   if ! command -v apt-get >/dev/null 2>&1 && [ -f /etc/redhat-release ] && ! grep -qi fedora /etc/redhat-release && ! rpm -q epel-release >/dev/null 2>&1; then
     tu ws_paket epel-release || true
   fi
   tu ws_paket certbot "python3-certbot-$1"
 }
-hsts_sichern() { # der HTTPS-Eintrag (von certbot ergaenzt bzw. angelegt) muss HSTS senden — fehlt die Zeile, nachtragen
+hsts_sichern() {
   local f="" z="" muster="" ok=""
   [ "${RD_DRY_RUN:-}" != "1" ] || return 0
   case "$vhost_angelegt" in
@@ -634,10 +555,7 @@ if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ "$VHOST" = "ja" ]; then
   elif command -v apache2ctl >/dev/null 2>&1; then webserver="apache2"
   elif command -v httpd >/dev/null 2>&1; then webserver="httpd"
   fi
-  # Gibt es fuer die Domain schon einen fremden Eintrag (z. B. das alte Zipline)? Dann nichts anfassen — umstellen
-  # ist ein bewusster Schritt (siehe Umzug unten), sonst stritten sich zwei Eintraege um die Domain.
   fremd=$(grep -RlsE "^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]]+(.*[[:space:]])?${DOMAIN//./\\.}([[:space:];]|$)" /etc/nginx/sites-enabled /etc/nginx/conf.d /etc/apache2/sites-enabled /etc/httpd/conf.d 2>/dev/null | grep -v 'reddrop' | head -1 || true)
-  # Zeigt der Eintrag schon auf RedDrop (z. B. nach dem Umzug von Zipline)? Dann ist alles erledigt.
   if [ -n "$fremd" ] && grep -qE "(proxy_pass|ProxyPass[[:space:]]+/)[[:space:]]+http://(127\.0\.0\.1|localhost):${PORT}(/|;|[[:space:]]|$)" "$fremd"; then
     say "==> $DOMAIN zeigt schon auf RedDrop ($fremd)." "==> $DOMAIN already points to RedDrop ($fremd)."
     fremd=""; webserver=""; vhost_angelegt="vorhanden"; https_ok=1
@@ -646,7 +564,6 @@ if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ "$VHOST" = "ja" ]; then
     say "==> Fuer $DOMAIN gibt es schon einen Eintrag: $fremd — den fasse ich nicht an." "==> There is already an entry for $DOMAIN: $fremd — I will not touch it."
     webserver=""
   fi
-  # Kein nginx/Apache da: auf Wunsch einen installieren (setzt webserver) — danach weiter wie mit vorhandenem Webserver
   if [ -z "$webserver" ] && [ -z "$fremd" ] && [ "$vhost_angelegt" != "vorhanden" ]; then ws_anbieten || true; fi
   if [ -n "$webserver" ] && { [ -n "$ws_neu" ] || ja "==> $(s "Virtual Host fuer $DOMAIN in $webserver anlegen (Backup vorhandener Dateien, Konfigtest, Neuladen)?" "Create a virtual host for $DOMAIN in $webserver (backup of existing files, config test, reload)?")" "j"; }; then
     stempel=$(date +%Y%m%d-%H%M%S)
@@ -702,13 +619,11 @@ server {
     if ! belegt 80 && ! belegt 443; then say "    Oder alles automatisch (Webserver, Virtual Host, HTTPS):  sudo bash install.sh --webserver nginx  (bzw. apache)" "    Or everything automatically (web server, virtual host, HTTPS):  sudo bash install.sh --webserver nginx  (or apache)"; fi
   fi
 
-  # 7. Zertifikat per certbot (HTTP-01 ueber den gerade angelegten Virtual Host)
   if [ -n "$vhost_angelegt" ] && [ "$vhost_angelegt" != "vorhanden" ]; then
     plugin="nginx"; [ "$vhost_angelegt" = "nginx" ] || plugin="apache"
     meine_ip=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
     domain_ip=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1; exit}' || true)
     if [ -n "$meine_ip" ] && [ "$domain_ip" != "$meine_ip" ]; then
-      # selbst installierter Webserver: certbot schon mitbringen — spaeter reicht dann der eine Befehl unten
       if [ -n "$ws_neu" ] && ! command -v certbot >/dev/null 2>&1; then certbot_installieren "$plugin" || true; fi
       say "==> $DOMAIN zeigt auf '${domain_ip:-nichts}', dieser Server hat $meine_ip — Zertifikat spaeter holen:" "==> $DOMAIN points to '${domain_ip:-nothing}', this server has $meine_ip — get the certificate later:"
       echo "    certbot --$plugin -d $DOMAIN --redirect"
@@ -727,8 +642,6 @@ server {
   fi
 fi
 }
-# ws_info — JSON fuer den Einrichtungs-Assistenten: vorhandener Webserver, Port 80/443, Paketverwaltung, certbot, Weg
-#   nach aussen. Steht auch woertlich im Update-Dienst (declare -f, Aktion „webserver-info“) — nur EINE Fassung.
 ws_info() {
   local ws="" frei=true wer="" paket=false cb=false modus=caddy p
   if command -v nginx >/dev/null 2>&1; then ws="nginx"
@@ -750,17 +663,13 @@ ws_info() {
   printf '{"zeit":"%s","modus":"%s","webserver":"%s","portsFrei":%s,"belegtVon":"%s","paketverwaltung":%s,"certbot":%s}\n' "$(date -Is)" "$modus" "$ws" "$frei" "$wer" "$paket" "$cb"
 }
 
-# Nur den Update-Dienst neu einrichten (update.sh ruft das nach jedem Update auf) — ohne Fragen, sonst bleibt alles
 if [ -n "$NUR_DIENST" ]; then
   mkdir -p import && chmod 755 import
   updater_einrichten || { say "FEHLER: Update-Dienst nicht eingerichtet: $DIENST_GRUND" "ERROR: update service not set up: $DIENST_GRUND"; exit 1; }
   exit 0
 fi
 
-# Nur Webserver + Virtual Host + HTTPS (Update-Dienst, Aktion „webserver“ aus dem Einrichtungs-Assistenten) — ohne Fragen,
-# mit denselben Funktionen wie die Installation. Rueckgabe: 0 = mit HTTPS, 3 = Virtual Host steht, HTTPS noch nicht, 1 = Fehler.
 if [ -n "$NUR_VHOST" ]; then
-  # Sperre als PID-Datei (kein flock: ein ohne systemd gestarteter Webserver erbte den Kanal und hielte sie fuer immer)
   v_sperre="$PWD/.webserver.lock"
   if [ -f "$v_sperre" ] && v_pid=$(tr -cd '0-9' < "$v_sperre") && [ -n "$v_pid" ] && kill -0 "$v_pid" 2>/dev/null; then
     say "FEHLER: Es laeuft schon eine Einrichtung des Webservers." "ERROR: A web server setup is already running."; exit 1
@@ -790,7 +699,6 @@ fi
 
 say "==> RedDrop wird eingerichtet" "==> Setting up RedDrop"
 
-# 1. Docker (falls noch nicht da)
 if ! command -v docker >/dev/null 2>&1; then
   say "==> Docker wird installiert …" "==> Installing Docker …"
   curl -fsSL https://get.docker.com | sh
@@ -800,7 +708,6 @@ for f in docker-compose.yml compose.caddy.yml compose.port.yml Caddyfile; do
   [ -f "$f" ] || curl -fsSL -o "$f" "$QUELLE/$f" || { say "FEHLER: $f fehlt neben install.sh und konnte nicht geladen werden." "ERROR: $f is missing next to install.sh and could not be downloaded."; exit 1; }
 done
 
-# 2. Bei wenig Arbeitsspeicher eine Auslagerungsdatei anlegen (unter 1,5 GB RAM, noch kein Swap)
 ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
 if [ "$ram_mb" -lt 1500 ] && [ "$(swapon --noheadings 2>/dev/null | wc -l)" -eq 0 ] && [ ! -f /swapfile ]; then
   say "==> Nur ${ram_mb} MB RAM: lege 1 GB Auslagerungsdatei an …" "==> Only ${ram_mb} MB RAM: creating a 1 GB swap file …"
@@ -808,10 +715,6 @@ if [ "$ram_mb" -lt 1500 ] && [ "$(swapon --noheadings 2>/dev/null | wc -l)" -eq 
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-# 3. .env: Datenbank-Passwort nur beim ersten Mal (sonst passt es nicht mehr zur Datenbank)
-# 3a. .env fehlt, aber die Container dieser Installation gibt es noch (z. B. Unraid nach einem Neustart: Ordner im RAM weg,
-#     Docker-Volumes noch da): Datenbank-Passwort von dort — ein neu gewuerfeltes passte nicht mehr zur Datenbank.
-#     Eine NEU angelegte .env wird bei einem Abbruch (Strg+C) vor Schritt 4 wieder entfernt — sonst fehlte spaeter der Weg nach aussen.
 ENV_NEU=0; WEG_FERTIG=0
 if [ ! -f .env ]; then
   env_db=$(docker ps -aq --filter "label=com.docker.compose.project=$(basename "$PWD")" --filter label=com.docker.compose.service=db 2>/dev/null || true)
@@ -831,11 +734,8 @@ if [ ! -f .env ]; then
   chmod 600 .env
   say "==> .env mit zufaelligem Datenbank-Passwort angelegt" "==> Created .env with a random database password"
 fi
-# Sprache merken — gilt auch fuer den Einrichtungs-Assistenten
 if grep -q '^RD_LANG=' .env; then sed -i "s/^RD_LANG=.*/RD_LANG=$SPR/" .env; else echo "RD_LANG=$SPR" >> .env; fi
 
-# Weg nach aussen sichern: kennt die .env keinen (z. B. nach einer abgebrochenen Einrichtung), wuerde ein Neustart den
-# freigegebenen Port bzw. Caddy verlieren — dann vom laufenden Container uebernehmen, sonst aus der letzten Sicherung.
 weg_retten() {
   WEG_GERETTET=""
   if grep -q '^COMPOSE_FILE=' .env 2>/dev/null; then return 0; fi
@@ -853,7 +753,6 @@ weg_retten() {
     ip=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostIp}}{{end}}' "$c" 2>/dev/null || true)
   fi
   if [ -n "$port" ]; then
-    # leere HostIp heisst: auf allen Adressen (so war es bisher erreichbar)
     printf 'COMPOSE_FILE=docker-compose.yml:compose.port.yml\nRD_PORT=%s\nRD_BIND=%s\n' "$port" "${ip:-0.0.0.0}" >> .env
     WEG_GERETTET="Port ${ip:-0.0.0.0}:$port"; return 0
   fi
@@ -868,9 +767,7 @@ weg_retten() {
 weg_retten
 [ -n "$WEG_GERETTET" ] && say "==> Die .env kannte keinen Weg nach außen — vom laufenden RedDrop übernommen ($WEG_GERETTET)" "==> .env had no way in — taken over from the running RedDrop ($WEG_GERETTET)"
 
-# 4. Weg nach aussen festlegen — nur, solange die .env noch keinen kennt
 if ! grep -q '^COMPOSE_FILE=' .env; then
-  # Bestehende Installation mit altem Compose (Caddy stand noch in docker-compose.yml): Caddy behalten.
   if [ -z "$MODUS" ] && docker ps --filter "label=com.docker.compose.service=caddy" --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null | grep -qx "$PWD"; then
     MODUS="caddy"
   fi
@@ -909,8 +806,7 @@ if ! grep -q '^COMPOSE_FILE=' .env; then
   fi
 fi
 WEG_FERTIG=1
-# 4b. Virenscan (ClamAV als eigener Container) — einmal fragen, danach im Panel umschaltbar
-profil_setzen() { # profil_setzen an|aus  → COMPOSE_PROFILES in der .env um "virenscan" ergaenzen/kuerzen
+profil_setzen() {
   local p; p=$(sed -n 's/^COMPOSE_PROFILES=//p' .env | tail -1 | tr ',' ' ')
   p=$(echo " $p " | sed 's/ virenscan / /g' | xargs)
   [ "$1" = "an" ] && p=$(echo "$p virenscan" | xargs)
@@ -928,21 +824,14 @@ elif ! grep -q '^RD_VIRENSCAN_GEFRAGT=' .env; then
   echo "RD_VIRENSCAN_GEFRAGT=1" >> .env
 fi
 
-# Werte aus der .env (auch bei einem zweiten Aufruf)
 PORT=$(sed -n 's/^RD_PORT=//p' .env | tail -1)
 [ -n "$DOMAIN" ] || DOMAIN=$(sed -n 's/^RD_PROXY_DOMAIN=//p' .env | tail -1)
 grep -q 'compose.port.yml' .env && MODUS="port" || MODUS="caddy"
-# --domain beim zweiten Aufruf: in der .env nachtragen, damit der Assistent sie vorwaehlt
 if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ]; then
   [[ "$DOMAIN" =~ ^[a-z0-9.-]+$ ]] || { say "FEHLER: ungueltige Domain: $DOMAIN" "ERROR: invalid domain: $DOMAIN"; exit 1; }
   if grep -q '^RD_PROXY_DOMAIN=' .env; then sed -i "s|^RD_PROXY_DOMAIN=.*|RD_PROXY_DOMAIN=$DOMAIN|" .env; else echo "RD_PROXY_DOMAIN=$DOMAIN" >> .env; fi
 fi
 
-# Passt das Datenbank-Passwort der .env nicht mehr zur Datenbank (.env neu angelegt, das Daten-Volume ist aber das
-# alte — etwa nach einem Unraid-Neustart oder einer zweiten Installation), kommt die App nie an ihre Daten (502).
-# Im Datenbank-Container geht der lokale Socket ohne Passwort: darueber das Passwort der .env setzen, Daten bleiben.
-# Geprueft wird ueber die Netz-Adresse des Containers (wie die App) — 127.0.0.1 ist dort ohne Passwort erlaubt.
-# Rueckgabe: 0 = passt, 2 = angeglichen (App neu gestartet), 1 = liess sich nicht angleichen
 db_passwort_angleichen() {
   local i
   [ -n "$(docker compose ps -q db 2>/dev/null)" ] || return 0
@@ -954,29 +843,22 @@ db_passwort_angleichen() {
   return 2
 }
 
-# 5. Starten
-# Ordner fuer Importe (Seite „Import“ → Server-Ordner), lesbar fuer den App-Nutzer (uid 1000)
 mkdir -p import && chmod 755 import
-if [ -d .output ]; then docker compose up -d --build; else docker compose pull && docker compose up -d; fi
+if [ -f .paket ]; then docker build -t ghcr.io/theredstonee/reddrop:latest . && docker compose up -d; elif [ -d .output ]; then docker compose up -d --build; else docker compose pull && docker compose up -d; fi
 db_rc=0; db_passwort_angleichen || db_rc=$?
 if [ "$db_rc" = 2 ]; then say "    Das Datenbank-Passwort passte nicht zur .env — angeglichen (Daten bleiben)." "    The database password did not match .env — fixed (data kept)."
 elif [ "$db_rc" = 1 ]; then say "    FEHLER: Das Datenbank-Passwort passt nicht zur .env und liess sich nicht angleichen." "    ERROR: The database password does not match .env and could not be fixed."; fi
 
-# 5b. Update-Dienst einrichten (Funktion steht oben)
 updater_einrichten || say "    Update-Dienst nicht eingerichtet: $DIENST_GRUND" "    Update service not set up: $DIENST_GRUND"
 
-# 6. + 7. Virtual Host und Zertifikat (Funktionen oben, auch fuer --nur-vhost)
 vhost_einrichten
 
-# 8. Auf die App warten und den Setup-Code zeigen
 say "==> Warte auf den Start …" "==> Waiting for the start …"
 for n in $(seq 1 60); do
   if docker compose logs app 2>/dev/null | grep -q 'Setup-Code\|bereit\|ready'; then break; fi
   for k in 0 1 2 3 4 5 6 7; do [ -t 1 ] && printf '\r  %s%s%s %s' "$R" "${SPIN[$(( (n * 8 + k) % ${#SPIN[@]} ))]}" "$N" "$(s "RedDrop startet" "RedDrop is starting") ($((n * 2)) s)"; sleep 0.25; done
 done
 [ -t 1 ] && printf '\r\033[K'
-# IP fuer Links und Kurzzeit-Eintrag: die oeffentliche nur, wenn sie auf dem Server selbst liegt (VPS).
-# Sonst steht der Server hinter einem Router (Heimnetz) — dann die IP, ueber die er ins Netz geht.
 ip_pub=$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
 ip_lan=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1 || true)
 [ -n "$ip_lan" ] || ip_lan=$(hostname -I 2>/dev/null | awk '{print $1}')
@@ -993,14 +875,10 @@ else
 fi
 echo ""
 
-# 9. Kurzzeit-Link: Port-Modus ohne Domain → die Einrichtung voruebergehend ueber http://<Server-IP> erlauben.
-#    Ein eigener Eintrag NUR fuer die IP (andere Domains im Webserver bleiben unberuehrt), geschuetzt durch
-#    den Setup-Code; nach der Einrichtung (oder bei Abbruch) wird er wieder entfernt. Wurde im Assistenten
-#    eine Domain eingetragen, bekommt sie danach ihren Virtual Host und das Zertifikat.
 setup_wert() { docker compose exec -T db psql -U reddrop -d reddrop -tAc "SELECT coalesce(value->>'$2', '') FROM settings WHERE key = '$1'" 2>/dev/null | tr -d '[:space:]'; }
 setup_fertig() { [ "$(setup_wert setup done)" = "true" ]; }
 kurz_datei=""; kurz_link=""; kurz_web=""; direkt_url=""
-direkt_freigeben() { # App direkt im Netz erreichbar: Port auf allen Schnittstellen statt nur 127.0.0.1
+direkt_freigeben() {
   if grep -q '^RD_BIND=' .env; then sed -i 's|^RD_BIND=.*|RD_BIND=0.0.0.0|' .env; else echo "RD_BIND=0.0.0.0" >> .env; fi
   tu docker compose up -d app >/dev/null 2>&1 || true
   direkt_url="http://${ip}:${PORT}"
@@ -1019,23 +897,18 @@ kurz_weg() {
   say "==> Kurzzeit-Eintrag fuer http://${ip} wieder entfernt." "==> Temporary entry for http://${ip} removed again."
   kurz_datei=""
 }
-# 10. Umzug: Unter der Domain laeuft schon ein anderer Dienst (eigener Eintrag im Webserver, z. B. Zipline).
-#     Zipline wird komplett uebernommen — Konten mit Passwoertern, Ordner, Tags, Linknamen, alte /u/-Links,
-#     auch passwortgeschuetzte Dateien —, solange es noch laeuft. Erst danach zeigt die Domain auf RedDrop
-#     (der alte Eintrag wird vorher gesichert; ein Zurueck ist jederzeit moeglich).
 umzug_schl=""; umzug_ordner=""; umzug_netz=""; umzug_app=""
-umzug_api() { # umzug_api '<json>' → Antwort der internen Installer-Schnittstelle von RedDrop
+umzug_api() {
   docker compose exec -T app wget -qO- --header "x-rd-installer: $umzug_schl" --header "content-type: application/json" --post-data "$1" http://127.0.0.1:3000/api/internal/installer 2>/dev/null || true
 }
 json_wert() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p" | head -1; }
 umzug_aufraeumen() {
   [ -n "$umzug_schl" ] && docker compose exec -T app rm -f /data/.installer-schluessel >/dev/null 2>&1 || true
-  # Nur Hardlinks und der Export (mit Geheimnissen der alten Instanz) — Ziplines eigene Dateien bleiben unberuehrt
   [ -n "$umzug_ordner" ] && rm -rf "./import/$umzug_ordner"
   [ -n "$umzug_netz" ] && docker network disconnect "$umzug_netz" "$umzug_app" >/dev/null 2>&1 || true
   umzug_ordner=""; umzug_netz=""
 }
-umzug_lauf() { # umzug_lauf <json-fuer-aktion-zipline> → importiert und wartet, bis alles da ist
+umzug_lauf() {
   local antwort id st
   antwort=$(umzug_api "$1")
   id=$(echo "$antwort" | json_wert id)
@@ -1055,9 +928,7 @@ umzug_lauf() { # umzug_lauf <json-fuer-aktion-zipline> → importiert und wartet
   echo ""
   [ "$st" = "fertig" ] || { say "    Import endete mit Status: $st" "    Import ended with status: $st"; return 1; }
 }
-# Einen Durchgang vorbereiten und ausfuehren: Server-Export + Hardlinks der Dateien (kein Extra-Platz) —
-# oder, wenn Zipline seine Dateien nicht lokal hat (S3), direkt ueber Ziplines eigenes Docker-Netz.
-zipline_durchgang() { # zipline_durchgang <ziel-url> <container> <token>
+zipline_durchgang() {
   local quelle stempel exp
   stempel=$(date +%Y%m%d-%H%M%S)
   quelle=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/zipline/uploads"}}{{.Source}}{{end}}{{end}}' "$2" 2>/dev/null || true)
@@ -1110,7 +981,6 @@ umzug_anbieten() {
   else
     ja "    $(s "$DOMAIN auf RedDrop umstellen? (Der bisherige Dienst ist unter dieser Domain dann nicht mehr erreichbar.)" "Switch $DOMAIN to RedDrop? (The previous service is then no longer reachable under this domain.)")" "n" || return 1
   fi
-  # Domain umstellen: im vorhandenen Eintrag nur das Ziel tauschen — Zertifikat und alles andere bleibt
   stempel=$(date +%Y%m%d-%H%M%S); mkdir -p /root/reddrop-backup
   sicher="/root/reddrop-backup/$(basename "$datei").bak-$stempel"
   cp -a "$datei" "$sicher"
@@ -1152,12 +1022,10 @@ umzug_anbieten() {
   return 0
 }
 
-# Schon eingerichtet und die Domain gehoert noch einem anderen Dienst? Dann gleich den Umzug anbieten.
 if [ "$MODUS" = "port" ] && [ -n "$DOMAIN" ] && [ -n "$fremd" ] && [ "${RD_DRY_RUN:-}" != "1" ] && setup_fertig; then
   umzug_anbieten && exit 0
 fi
 
-# Kurzzeit-Link auch dann, wenn die Domain noch auf den alten Dienst zeigt (Einrichtung erst, dann Umzug)
 if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && { [ -z "$DOMAIN" ] || [ -n "$fremd" ]; } && [ "$VHOST" = "ja" ] && [[ "${ip:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "${RD_DRY_RUN:-}" != "1" ] && ! setup_fertig; then
   if command -v nginx >/dev/null 2>&1; then kurz_web="nginx"
   elif command -v apache2ctl >/dev/null 2>&1; then kurz_web="apache2"
@@ -1214,7 +1082,7 @@ if [ "$MODUS" = "port" ] && [ -z "$vhost_angelegt" ] && { [ -z "$DOMAIN" ] || [ 
       fi
     fi
   else
-    direkt_freigeben   # „Nein“ oder kein Webserver: einfach die IP mit dem gewaehlten Port
+    direkt_freigeben
   fi
 fi
 if [ -n "$direkt_url" ]; then
@@ -1247,7 +1115,6 @@ else
   say "    Firewall: Port 80 und 443 muessen von aussen erreichbar sein." "    Firewall: port 80 and 443 must be reachable from outside."
 fi
 say "    Den Setup-Code siehst du oben (oder: docker compose logs app | grep Setup-Code)." "    You can see the setup code above (or: docker compose logs app | grep Setup-Code)."
-# Abschluss: Adresse noch einmal gross
 ziel_url=""
 if [ -n "$direkt_url" ]; then ziel_url="$direkt_url"
 elif [ "$MODUS" = "port" ] && [ -n "${vhost_angelegt:-}" ] && [ -n "${DOMAIN:-}" ]; then ziel_url="$([ -n "${https_ok:-}" ] && echo https || echo http)://${DOMAIN}"

@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
-# RedDrop — nur aktualisieren: nichts neu einrichten, keine Fragen. .env, Daten, Domain und Einstellungen bleiben.
-#   curl -fsSL https://raw.githubusercontent.com/theredstonee/reddrop-docker/main/update.sh | sudo bash
-# Holt die neuesten Dateien (Compose, Caddyfile, install.sh …; alte Fassungen nach .sicherung/), startet mit dem
-# neuen Image und bringt den Update-Dienst auf den neuesten Stand. Der Knopf „Jetzt aktualisieren“ im Panel ruft
-# dieses Skript danach selbst auf — einmal von Hand reicht, alles Weitere geht per Knopf.
-# Schalter: --dir /pfad   Installationsordner (sonst RD_DIR, der Ordner aus dem Update-Dienst oder /opt/reddrop)
-#           --status <datei>  nur fuer den Update-Dienst: Fortschritt fuer das Panel
 set -uo pipefail
-# Alles in einem Block: bash liest so das ganze Skript ein, bevor es loslaeuft. Bei „curl … | bash“ wuerde sonst
-# jeder Befehl, der von der Eingabe liest (z. B. docker compose exec), den Rest des Skripts aus der Leitung schlucken.
 {
 exec </dev/null
-# RD_QUELLE nur fuer Tests (eigener Dateiserver statt GitHub)
 QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"
-DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml knoten-host.sh Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
 DIR="${RD_DIR:-}"; STATUS=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -23,7 +13,6 @@ while [ $# -gt 0 ]; do
     *) echo "Unknown option / Unbekannter Schalter: $1"; exit 1 ;;
   esac
 done
-# Vom Update-Dienst als Kopie in /tmp gestartet: die Kopie wieder wegraeumen (bash hat sie schon offen)
 case "$0" in /tmp/tmp.*) rm -f "$0" ;; esac
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
@@ -35,18 +24,12 @@ else Z_SCHRITT=">"; Z_OK="OK"; Z_FEHLER="X"; Z_V="|"; fi
 SPR="de"
 s() { if [ "$SPR" = "de" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 kurz() { printf '%s' "$1" | tail -3 | tr '\n"\\' '   ' | cut -c1-400; }
-# Status und Protokoll liegen im Datenordner der App — der gehoert dem App-Nutzer im Container, dieses Skript laeuft
-# als root: nie durch einen dort gelegten Link schreiben (gleiche Funktionen wie im Update-Dienst von install.sh).
-# sicher_ordner <ordner> — 0, wenn <ordner> ein echter Ordner ist und kein Link (auch nicht im letzten Glied):
-# physischer Pfad == physischer Pfad des Elternordners + Name.
 sicher_ordner() {
   local d="${1%/}" p
   [ -d "$d" ] && [ ! -L "$d" ] || return 1
   p=$(cd -P "${d%/*}/" 2>/dev/null && pwd) || return 1
   [ "$(cd -P "$d" 2>/dev/null && pwd)" = "${p%/}/${d##*/}" ]
 }
-# ablegen <pfad> — stdin als <pfad> ablegen (644), ohne je einem Link zu folgen: neue Datei mit O_EXCL (set -C)
-# im Ordner selbst (cd: ein danach vertauschter Ordner aendert nichts), dann umbenennen (folgt keinem Link).
 ablegen() {
   local d="${1%/*}" n="${1##*/}"
   sicher_ordner "$d" || return 1
@@ -55,8 +38,6 @@ ablegen() {
     ( umask 022; set -C; cat > "$t" ) 2>/dev/null || exit 1
     mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; } )
 }
-# log_oeffnen <pfad> <fd> — <pfad> frisch anlegen (644) und in EINEM Schritt (O_EXCL) auf Kanal <fd> oeffnen;
-# danach nur noch ueber /dev/fd/<fd> schreiben und lesen. Beispiel:  log_oeffnen "$DATEN/.update.log" 6 && LOG=/dev/fd/6
 log_oeffnen() {
   local d="${1%/*}" n="${1##*/}" t alt="$PWD" um rc=1 c=""
   case "$2" in [3-9]) ;; *) return 1 ;; esac
@@ -66,25 +47,19 @@ log_oeffnen() {
   case "$-" in *C*) c=1 ;; esac
   set -C
   if eval "exec $2>\"\$t\"" 2>/dev/null; then rc=0; fi
-  # gleich im Anhaenge-Modus neu oeffnen — ueber den Kanal selbst (dieselbe Datei), nicht ueber den Pfad
   if [ "$rc" = 0 ]; then eval "exec $2>>/dev/fd/$2" 2>/dev/null || true; fi
   [ -n "$c" ] || set +C; umask "$um"
   if [ "$rc" = 0 ]; then mv -fT "$t" "$n" 2>/dev/null || { rm -f "$n"; mv -f "$t" "$n"; }; fi
   cd "$alt" 2>/dev/null || true
   return "$rc"
 }
-status() { # status laeuft|fertig|fehler "Meldung" — nur mit --status (Panel)
+status() {
   [ -n "$STATUS" ] || return 0
   printf '{"status":"%s","zeit":"%s","meldung":"%s"}\n' "$1" "$(date -Is)" "$(kurz "$2")" | ablegen "$STATUS" || true
 }
-# Vom Update-Dienst gestartet (--status): Live-Protokoll fuers Panel neben der Status-Datei (.update.log, je Lauf neu).
-# Frisch angelegt und auf Kanal 6 geoeffnet; geschrieben wird nur ueber /dev/fd/6.
 LOG=""; LOG_PFAD=""
 if [ -n "$STATUS" ]; then LOG_PFAD="$(dirname "$STATUS")/.update.log"; if log_oeffnen "$LOG_PFAD" 6; then LOG=/dev/fd/6; else LOG_PFAD=""; fi; fi
 protokoll() { [ -n "$LOG" ] && printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' >> "$LOG"; return 0; }
-# Im Terminal: Schritte mit Nummer und ein Spinner mit laufenden Sekunden, damit man sieht, dass etwas passiert.
-# Die Docker-Ausgabe landet in einer Datei (letzte Zeile klein neben dem Spinner); bei einem Fehler erscheinen die
-# letzten 30 Zeilen rot. Ohne Terminal (Dienst, Umleitung in eine Datei) bleibt es bei einfachen Zeilen.
 ANSICHT=0; [ -t 1 ] && [ -z "$STATUS" ] && ANSICHT=1
 SCHRITTE=5; SCHRITT_NR=0
 AUSG=$(mktemp 2>/dev/null || echo "/tmp/upd-ausgabe.$$"); : > "$AUSG"
@@ -92,7 +67,6 @@ SPIN_PID=""; SPIN_TXT="$AUSG.txt"; SPIN_T0=0
 if [ "$Z_V" = "│" ]; then SPIN_Z=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏); else SPIN_Z=('|' '/' '-' '\'); fi
 BREITE=$(tput cols 2>/dev/null || echo 80); case "$BREITE" in ''|*[!0-9]*) BREITE=80 ;; esac
 trap 'warte_ende; rm -f "$AUSG" "$AUSG.app" "$SPIN_TXT"' EXIT
-# warte "Text" "text": Spinner an — endet mit dem naechsten warte/info/schritt (gruener Haken) oder abbruch (rotes X)
 warte() {
   protokoll "    $(s "$1" "$2") …"
   if [ "$ANSICHT" != 1 ]; then echo "  ${D}${Z_V}${N} $(s "$1" "$2") …"; return 0; fi
@@ -114,9 +88,7 @@ warte() {
   ) &
   SPIN_PID=$!
 }
-# Text am laufenden Spinner aendern (z. B. Zustand im Selbsttest)
 warte_text() { [ "$ANSICHT" = 1 ] && [ -n "$SPIN_PID" ] && printf '%s' "$(s "$1" "$2")" > "$SPIN_TXT"; return 0; }
-# warte_ende [ok|fehler]: Spinner aus, Zeile mit Haken bzw. X und Dauer stehen lassen (ohne Angabe: nur wegwischen)
 warte_ende() {
   [ -n "$SPIN_PID" ] || return 0
   kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null; SPIN_PID=""
@@ -133,7 +105,6 @@ schritt() {
   echo "${R}${B}${Z_SCHRITT}${N} ${D}[${SCHRITT_NR}/${SCHRITTE}]${N} ${B}$(s "$1" "$2")${N}"; protokoll "==> [${SCHRITT_NR}/${SCHRITTE}] $(s "$1" "$2")"
 }
 info() { warte_ende ok; echo "  ${D}${Z_V}${N} $(s "$1" "$2")"; protokoll "    $(s "$1" "$2")"; }
-# Fehler: rotes X am Spinner, die letzten 30 Zeilen der Ausgabe dieses Schritts, dann die Meldung (auch fuers Panel)
 abbruch() {
   warte_ende fehler
   if [ "$ANSICHT" = 1 ] && [ -s "$AUSG" ]; then
@@ -142,7 +113,6 @@ abbruch() {
   fi
   echo "${R}${B}${Z_FEHLER} $(s "$1" "$2")${N}" >&2; protokoll "Fehler: $(s "$1" "$2")"; status fehler "$(s "$1" "$2")"; exit 1
 }
-# Befehl ausfuehren: Ausgabe in $AUSG (und ins Live-Protokoll fuers Panel), Ende davon in $AUSGABE fuer Meldungen
 AUSGABE=""
 lauf() {
   local rc=0
@@ -155,25 +125,21 @@ lauf() {
 
 [ "$(id -u)" -eq 0 ] || abbruch "Bitte mit sudo starten: curl -fsSL $QUELLE/update.sh | sudo bash" "Please run with sudo: curl -fsSL $QUELLE/update.sh | sudo bash"
 
-# Installationsordner finden: --dir → RD_DIR → Ordner aus dem Update-Dienst → /opt/reddrop → aktueller Ordner
 for d in /usr/local/bin/reddrop-update /boot/config/plugins/reddrop/reddrop-update; do
   [ -z "$DIR" ] && [ -f "$d" ] && DIR=$(sed -n 's/^DIR="\([^"]*\)".*/\1/p' "$d" | head -1)
 done
 for k in "$DIR" /mnt/user/appdata/reddrop /opt/reddrop "$PWD"; do
   if [ -n "$k" ] && [ -f "$k/docker-compose.yml" ] && [ -f "$k/.env" ]; then DIR="$k"; break; fi
 done
-# inst_suchen — vorhandene RedDrop-Installation(en) finden, auch mit anderem Ordnernamen oder an ungewoehnlichem Ort.
-# Docker Compose merkt sich den Ordner jeder Installation im Container-Label. Vorrang: laufende Installationen, dann
-# gestoppte, erst danach Ordner auf der Platte mit einer docker-compose.yml fuer unser Image. Ein Ordner pro Zeile.
-inst_echt() { # inst_echt <ordner> — nur Ordner, deren COMPOSE_FILE ausschliesslich mitgelieferte Dateien nennt (Test-/Eigenbau-Umgebungen nie uebernehmen)
+inst_echt() {
   local cf x
   cf=$(sed -n 's/^COMPOSE_FILE=//p' "$1/.env" 2>/dev/null | tail -1 | tr -d '"'"'"'\r')
   [ -n "$cf" ] || return 0
   for x in $(printf '%s' "$cf" | tr ':' ' '); do
-    case "$x" in docker-compose.yml|compose.caddy.yml|compose.port.yml|compose.node.yml) ;; *) return 1 ;; esac
+    case "$x" in docker-compose.yml|compose.caddy.yml|compose.port.yml|compose.node.yml|compose.tunnel.yml) ;; *) return 1 ;; esac
   done
 }
-inst_ordner() { # inst_ordner <docker-ps-Schalter …> — Ordner der passenden App-Container
+inst_ordner() {
   local c d img
   command -v docker >/dev/null 2>&1 || return 0
   while IFS= read -r c; do
@@ -191,11 +157,10 @@ inst_suchen() {
   while IFS= read -r f; do
     case "$f" in */.sicherung/*|*.umgezogen-*|*/.trash*) continue ;; esac
     grep -q 'theredstonee/reddrop:' "$f" 2>/dev/null || continue
-    grep -q 'theredstonee/redclub:' "$f" 2>/dev/null && continue   # RedClub mit eingebautem RedDrop
+    grep -q 'theredstonee/redclub:' "$f" 2>/dev/null && continue
     d=$(dirname "$f"); [ -f "$d/.env" ] && inst_echt "$d" && printf '%s\n' "$d"
   done < <(find /opt /srv /root /home /mnt/user/appdata /mnt/cache/appdata /docker /data -maxdepth 3 -name docker-compose.yml 2>/dev/null) | awk 'NF && !s[$0]++'
 }
-# Nicht an den ueblichen Orten: ueberall suchen (anderer Ordnername, /root, /home, Unraid-appdata …)
 if [ -z "$DIR" ] || [ ! -f "$DIR/.env" ] || [ ! -f "$DIR/docker-compose.yml" ]; then
   gefunden=$(inst_suchen); anzahl=$(printf '%s\n' "$gefunden" | grep -c . || true)
   if [ "$anzahl" = 1 ]; then DIR="$gefunden"
@@ -210,17 +175,11 @@ if [ -z "$DIR" ] || [ ! -f "$DIR/.env" ] || [ ! -f "$DIR/docker-compose.yml" ]; 
 fi
 cd "$DIR" || abbruch "Ordner $DIR nicht lesbar" "Cannot open $DIR"
 
-# Unraid: ausser /boot (USB-Stick) und /mnt (Array/Cache) liegt alles im Arbeitsspeicher — nach einem Neustart waeren
-# Compose-Dateien und .env weg (die Datenbank im Docker-Volume bleibt, passt dann aber nicht mehr zu einer neuen .env).
-# Darum gehoert die Installation dort nach /mnt/user/appdata/<Ordnername>: gleicher Name → gleicher Compose-Projektname
-# → dieselben Volumes. unraid_ziel <ordner> gibt den dauerhaften Ordner aus, wenn <ordner> im Arbeitsspeicher liegt.
 unraid_ziel() {
   [ -f /etc/unraid-version ] && [ -d /mnt/user ] || return 1
   case "$1" in /mnt/*|/boot/*) return 1 ;; esac
   printf '%s' "/mnt/user/appdata/$(basename "$1")"
 }
-# unraid_umziehen <alt> <neu> — Ordner kopieren, Dienst + Zeitplan auf den neuen Ordner umstellen, alten beiseitelegen.
-# Die laufenden Container bleiben, bis sie aus dem neuen Ordner neu gestartet werden (Update/Installation tun das).
 unraid_umziehen() {
   local alt="$1" neu="$2" a f
   [ -f "$alt/docker-compose.yml" ] || return 1
@@ -234,13 +193,11 @@ unraid_umziehen() {
   mv "$alt" "$alt.umgezogen-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
   return 0
 }
-# Liegt die Installation noch im Arbeitsspeicher: jetzt umziehen (Schritt 2 startet die Container von dort neu)
 if unraid_neu=$(unraid_ziel "$DIR"); then
   unraid_alt="$DIR"
   if unraid_umziehen "$unraid_alt" "$unraid_neu"; then
     DIR="$unraid_neu"; cd "$DIR" || abbruch "Ordner $DIR nicht lesbar" "Cannot open $DIR"
     case "$STATUS" in "$unraid_alt"/*) STATUS="$DIR${STATUS#"$unraid_alt"}" ;; esac
-    # Protokoll im umgezogenen Ordner neu anlegen und das bisherige mitnehmen
     case "${LOG_PFAD:-}" in "$unraid_alt"/*)
       LOG_PFAD="$DIR${LOG_PFAD#"$unraid_alt"}"; log_bisher=$(cat /dev/fd/6 2>/dev/null || true)
       if log_oeffnen "$LOG_PFAD" 6; then printf '%s\n' "$log_bisher" >> /dev/fd/6; else LOG=""; LOG_PFAD=""; fi ;;
@@ -251,13 +208,13 @@ if unraid_neu=$(unraid_ziel "$DIR"); then
   fi
 fi
 l=$(sed -n 's/^RD_LANG=//p' .env | tail -1); [ "$l" = "en" ] && SPR="en"
+[ -f .paket ] && abbruch "Diese Installation stammt aus einem Paket. Bitte das neue Paket einspielen (siehe LIESMICH.txt)." "This installation comes from a package. Please deploy the new package (see LIESMICH.txt)."
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 || abbruch "Docker mit „docker compose“ fehlt auf diesem Server." "Docker with “docker compose” is missing on this server."
 alt=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1)
 echo ""
 echo "${R}${B}RedDrop${N} ${D}— $(s "Aktualisieren" "Update") $(s "in" "in") $DIR${N}"
 sich=".sicherung/$(date +%Y%m%d-%H%M%S)"
 
-# 0. Vorab pruefen: genug Platz fuer das neue Image, Datenbank sichern — sonst wird nichts angefasst
 schritt "Vorab pruefen und sichern" "Checking and backing up first"
 status laeuft "$(s "Vorab-Pruefung" "Pre-check")"
 wurzel=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null); [ -d "$wurzel" ] || wurzel=/var/lib/docker; [ -d "$wurzel" ] || wurzel=/
@@ -268,10 +225,8 @@ if [ -n "$frei" ] && [ "$frei" -lt 1024 ]; then
 fi
 info "Freier Platz: ${frei:-?} MB" "Free space: ${frei:-?} MB"
 mkdir -p "$sich" && chmod 700 .sicherung
-# .env mitsichern (nur lesbar fuer root) — daraus kann ein spaeterer Lauf den Weg nach aussen zurueckholen
 cp -p .env "$sich/.env" 2>/dev/null && chmod 600 "$sich/.env" || true
 if [ -n "$(docker compose ps -q db 2>/dev/null)" ]; then
-  # pg_dump im Datenbank-Container (Benutzer/Name aus dessen Umgebung) — gepackt, nur fuer root lesbar
   warte "Datenbank wird gesichert" "Backing up the database"
   if docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' 2>>"$AUSG" | gzip > "$sich/datenbank.sql.gz" && [ "$(wc -c < "$sich/datenbank.sql.gz")" -gt 200 ]; then
     chmod 600 "$sich/datenbank.sql.gz"
@@ -283,16 +238,12 @@ if [ -n "$(docker compose ps -q db 2>/dev/null)" ]; then
 else
   info "${Y}Datenbank laeuft gerade nicht — ohne Sicherung weiter.${N}" "${Y}Database is not running — continuing without a backup.${N}"
 fi
-# fuer den Ruecksprung: welches Image laeuft gerade?
 app_alt=$(docker compose ps -q app 2>/dev/null | head -1)
 bild_alt=""; bild_name=""
 if [ -n "$app_alt" ]; then bild_alt=$(docker inspect -f '{{.Image}}' "$app_alt" 2>/dev/null); bild_name=$(docker inspect -f '{{.Config.Image}}' "$app_alt" 2>/dev/null); fi
-# Das alte Image unter eigenem Namen festhalten: Docker mit containerd-Speicher loescht es sonst, sobald das neue
-# den Namen uebernimmt und der alte Container ersetzt ist — dann gaebe es beim Ruecksprung nichts mehr zum Starten
 SICHER_BILD="ruecksprung/reddrop:vorher"
 if [ -n "$bild_alt" ]; then docker tag "$bild_alt" "$SICHER_BILD" >/dev/null 2>&1 || SICHER_BILD=""; else SICHER_BILD=""; fi
 
-# 1. Neueste Dateien holen und pruefen, bevor irgendetwas ersetzt wird
 schritt "Neueste Dateien holen" "Fetching the latest files"
 status laeuft "$(s "Dateien werden geladen" "Downloading files")"
 warte "Dateien werden geladen" "Downloading files"
@@ -315,12 +266,10 @@ if [ "$geladen" = 1 ]; then
     [ -f "$tmp/$f" ] || continue
     cmp -s "$tmp/$f" "$f" 2>/dev/null && continue
     [ ! -f "$f" ] || cp -a "$f" "$sich/"
-    # neue Datei daneben anlegen und umbenennen: ein laufendes Skript liest so seine alte Fassung weiter
     cp "$tmp/$f" "$f.neu" && mv -f "$f.neu" "$f" && geaendert="$geaendert $f"
   done
   chmod 755 install.sh update.sh 2>/dev/null || true
   if [ -n "$geaendert" ] && ! docker compose config -q >/dev/null 2>&1; then
-    # Neue Compose-Fassung passt nicht zu dieser .env: alles zurueck, mit den alten Dateien weiter
     for f in $geaendert; do if [ -f "$sich/$f" ]; then cp -a "$sich/$f" "$f"; else rm -f "$f"; fi; done
     info "${Y}Die neuen Compose-Dateien passen nicht zu dieser .env — die bisherigen bleiben.${N}" "${Y}The new compose files do not fit this .env — keeping the current ones.${N}"
     geaendert=""
@@ -329,14 +278,8 @@ if [ "$geladen" = 1 ]; then
 else
   info "${Y}GitHub ist gerade nicht erreichbar — es wird nur das Image aktualisiert.${N}" "${Y}GitHub is not reachable right now — only the image is updated.${N}"
 fi
-# nur die fuenf neuesten Sicherungen behalten
 ls -1d .sicherung/*/ 2>/dev/null | sort -r | tail -n +6 | xargs -r rm -rf
 
-# Passt das Datenbank-Passwort der .env nicht mehr zur Datenbank (.env neu angelegt, das Daten-Volume ist aber das
-# alte — etwa nach einem Unraid-Neustart oder einer zweiten Installation), kommt die App nie an ihre Daten (502).
-# Im Datenbank-Container geht der lokale Socket ohne Passwort: darueber das Passwort der .env setzen, Daten bleiben.
-# Geprueft wird ueber die Netz-Adresse des Containers (wie die App) — 127.0.0.1 ist dort ohne Passwort erlaubt.
-# Rueckgabe: 0 = passt, 2 = angeglichen (App neu gestartet), 1 = liess sich nicht angleichen
 db_passwort_angleichen() {
   local i
   [ -n "$(docker compose ps -q db 2>/dev/null)" ] || return 0
@@ -348,8 +291,6 @@ db_passwort_angleichen() {
   return 2
 }
 
-# Weg nach aussen sichern: kennt die .env keinen (z. B. nach einer abgebrochenen Einrichtung), wuerde ein Neustart den
-# freigegebenen Port bzw. Caddy verlieren — dann vom laufenden Container uebernehmen, sonst aus der letzten Sicherung.
 weg_retten() {
   WEG_GERETTET=""
   if grep -q '^COMPOSE_FILE=' .env 2>/dev/null; then return 0; fi
@@ -367,7 +308,6 @@ weg_retten() {
     ip=$(docker inspect -f '{{with index .HostConfig.PortBindings "3000/tcp"}}{{(index . 0).HostIp}}{{end}}' "$c" 2>/dev/null || true)
   fi
   if [ -n "$port" ]; then
-    # leere HostIp heisst: auf allen Adressen (so war es bisher erreichbar)
     printf 'COMPOSE_FILE=docker-compose.yml:compose.port.yml\nRD_PORT=%s\nRD_BIND=%s\n' "$port" "${ip:-0.0.0.0}" >> .env
     WEG_GERETTET="Port ${ip:-0.0.0.0}:$port"; return 0
   fi
@@ -384,7 +324,6 @@ weg_retten
 if [ -n "$WEG_GERETTET" ]; then info "${Y}Die .env kannte keinen Weg nach außen — übernommen ($WEG_GERETTET), damit der Neustart RedDrop nicht unerreichbar macht.${N}" "${Y}.env had no way in from outside — taken over ($WEG_GERETTET) so the restart does not make RedDrop unreachable.${N}"
 elif ! grep -q '^COMPOSE_FILE=' .env && ! grep -q '^COMPOSE_PROFILES=.*tunnel' .env; then info "${Y}Achtung: Die .env kennt keinen Weg nach außen (kein Port, kein Caddy, kein Tunnel) — RedDrop ist danach nur intern erreichbar. Beheben: install.sh erneut ausführen.${N}" "${Y}Warning: .env knows no way in (no port, Caddy or tunnel) — RedDrop is only reachable internally afterwards. Fix: run install.sh again.${N}"; fi
 
-# 2. Neues Image laden und neu starten (alle Dienste der .env: App, Datenbank, Caddy, Tunnel …)
 schritt "Neues Image laden und neu starten" "Pulling the new image and restarting"
 status laeuft "$(s "Image wird geladen" "Pulling the image")"
 if [ -d .output ]; then
@@ -404,7 +343,6 @@ case "$db_rc" in
   *) warte_ende ok ;;
 esac
 
-# 3. Selbsttest: meldet sich die App gesund? Sonst zurueck auf die vorherige Fassung (Image + Dateien)
 schritt "Selbsttest" "Self-test"
 status laeuft "$(s "Selbsttest" "Self-test")"
 zustand=""
@@ -415,7 +353,7 @@ for i in $(seq 1 90); do
   case "$zustand" in
     healthy) break ;;
     unhealthy|exited|dead) break ;;
-    running) [ "$i" -ge 15 ] && break ;;   # Image ohne Gesundheitspruefung: 30 s durchgelaufen reicht
+    running) [ "$i" -ge 15 ] && break ;;
   esac
   [ $((i % 5)) -eq 0 ] && protokoll "    Selbsttest: $((i * 2)) s, Zustand ${zustand:-startet} …"
   warte_text "Selbsttest läuft — Zustand: ${zustand:-startet}" "Self-test running — state: ${zustand:-starting}"
@@ -441,7 +379,6 @@ else
           "Update rolled back: the previous version was started again.$se log: docker compose logs app"
 fi
 
-# 4. Update-Dienst neu einrichten (ohne Fragen) — so kommen neue Aktionen fuer das Panel mit
 schritt "Update-Dienst auf den neuesten Stand bringen" "Updating the update service"
 dienst_hinweis=""
 warte "Update-Dienst wird eingerichtet" "Setting up the update service"
@@ -459,6 +396,7 @@ fi
 
 warte_ende ok
 neu=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' version.json 2>/dev/null | head -1)
+[ -s .knoten-web ] && bash knoten-host.sh web-neu >/dev/null 2>&1 || true
 status fertig "$dienst_hinweis"
 echo ""
 ver="$neu"; [ -n "$alt" ] && [ -n "$neu" ] && [ "$alt" != "$neu" ] && ver="$alt → $neu"

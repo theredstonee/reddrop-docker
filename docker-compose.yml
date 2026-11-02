@@ -1,27 +1,3 @@
-# RedDrop — By TheRedStonee · https://www.theredstonee.de
-#
-# Start:   docker compose up -d
-# Danach:  die Adresse aus der Installation im Browser oeffnen und dem Assistenten folgen.
-# Den Setup-Code zeigt:  docker compose logs app | grep Setup-Code
-#
-# Diese Datei enthaelt nur App und Datenbank. Wie RedDrop nach aussen kommt, legt COMPOSE_FILE
-# in der .env fest (install.sh setzt das automatisch):
-#   docker-compose.yml:compose.caddy.yml   eigener Caddy auf Port 80/443 mit automatischem HTTPS
-#   docker-compose.yml:compose.port.yml    nur ein Port auf 127.0.0.1 hinter deinem nginx/Apache
-#
-# Die hochgeladenen Dateien liegen im Volume "dateien" (im Container /data).
-#
-# Virenscan (optional): ClamAV laeuft nur mit dem Profil "virenscan" — COMPOSE_PROFILES=virenscan in der
-# .env (setzt install.sh bzw. der Schalter unter Einstellungen → Installation). Braucht ~1,5 GB RAM.
-#
-# Cloudflare Tunnel (optional): cloudflared laeuft nur mit dem Profil "tunnel" — eingeschaltet im Panel unter
-# Einstellungen → Installation (setzt RD_TUNNEL_TOKEN + COMPOSE_PROFILES ueber den Update-Dienst).
-#
-# Speicher (optional, ab 1.6.0): Storage-Boxen (SFTP/SCP/WebDAV, SFTPGo) und S3-Buckets (Garage) laufen nur mit dem
-# Profil "speicher" — eingeschaltet im Panel unter „Speicher“ (der Update-Dienst erzeugt die Geheimnisse in der .env).
-# Beide Programme laufen unveraendert in eigenen Containern (Lizenz AGPL-3.0, Quellcode: github.com/drakkan/sftpgo,
-# git.deuxfleurs.fr/Deuxfleurs/garage). SFTP geht ueber RD_SFTP_PORT (Standard 2222), WebDAV und S3 ueber die Adresse
-# von RedDrop selbst (RedDrop reicht /webdav/ und signierte S3-Anfragen an die Container weiter).
 services:
   app:
     image: ghcr.io/theredstonee/reddrop:latest
@@ -29,13 +5,9 @@ services:
     environment:
       NUXT_DB_URL: postgres://reddrop:${DB_PASSWORD:?Bitte DB_PASSWORD in .env setzen}@db:5432/reddrop
       TZ: ${TZ:-Europe/Berlin}
-      # Notausgang bei verlorener Zwei-Faktor-Anmeldung, siehe README (normalerweise leer).
       RD_RESET_2FA: ${RD_RESET_2FA:-}
-      # Sprache bis zur Einrichtung (de|en) — fragt install.sh ab; danach gilt die Einstellung im Panel
       RD_LANG: ${RD_LANG:-de}
-      # Pro — mehrere Server: Name dieses Servers in der Server-Liste (sonst der Container-Name)
       RD_NODE_NAME: ${RD_NODE_NAME:-}
-      # Pro — S3 fest vorgeben statt im Panel (leer = im Panel einstellen). Siehe README.
       RD_S3_ENDPOINT: ${RD_S3_ENDPOINT:-}
       RD_S3_REGION: ${RD_S3_REGION:-}
       RD_S3_BUCKET: ${RD_S3_BUCKET:-}
@@ -43,28 +15,19 @@ services:
       RD_S3_SECRET_KEY: ${RD_S3_SECRET_KEY:-}
       RD_S3_PATH_STYLE: ${RD_S3_PATH_STYLE:-}
       RD_S3_PREFIX: ${RD_S3_PREFIX:-}
-      # Virenscan: Adresse des clamd (Dienst "clamav" unten). Ohne laufenden Container prueft RedDrop nichts.
       RD_CLAMAV: ${RD_CLAMAV:-clamav:3310}
-      # Cloudflare Tunnel: Status-Abfrage beim cloudflared-Container (Dienst "cloudflared" unten)
       RD_TUNNEL_METRICS: ${RD_TUNNEL_METRICS:-cloudflared:2000}
-      # Speicher (Profil "speicher"): Verwaltung von SFTPGo und Garage — leer = Speicher aus
       RD_SFTPGO_ADMIN_PW: ${RD_SFTPGO_ADMIN_PW:-}
       RD_GARAGE_ADMIN_TOKEN: ${RD_GARAGE_ADMIN_TOKEN:-}
       RD_SFTP_PORT: ${RD_SFTP_PORT:-}
     volumes:
       - dateien:/data
-      # Speicher: Dateien der Storage-Boxen (dasselbe Volume wie im Dienst "sftpgo") — RedDrop legt hier nur Ordner an
-      # und raeumt geloeschte Boxen weg
       - speicher:/speicher
-      # Import (Seite „Import“ → Server-Ordner): alte Upload-Ordner von Zipline, XBackBone, Chibisafe …
-      # hierhin kopieren oder verlinken. Nur lesend — RedDrop veraendert dort nichts.
       - ./import:/import:ro
     depends_on:
       db:
         condition: service_healthy
-    # Nicht direkt nach aussen geoeffnet — erreichbar nur ueber Caddy oder den Port aus compose.port.yml.
     expose: ["3000"]
-    # Zeit zum sauberen Abmelden (laufende Uploads, Server-Liste)
     stop_grace_period: 20s
 
   db:
@@ -86,7 +49,6 @@ services:
     image: clamav/clamav:1.4
     profiles: ["virenscan"]
     restart: unless-stopped
-    # Signaturen bleiben ueber Neustarts erhalten (sonst bei jedem Start ~300 MB neu laden)
     volumes:
       - clamav:/var/lib/clamav
     expose: ["3310"]
@@ -95,7 +57,6 @@ services:
     image: cloudflare/cloudflared:2026.9.3
     profiles: ["tunnel"]
     restart: unless-stopped
-    # Ziel im Cloudflare-Dashboard: http://app:3000 (die App in diesem Compose-Netz)
     command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
     environment:
       TUNNEL_TOKEN: ${RD_TUNNEL_TOKEN:-}
@@ -110,12 +71,10 @@ services:
       SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN: "true"
       SFTPGO_DEFAULT_ADMIN_USERNAME: reddrop
       SFTPGO_DEFAULT_ADMIN_PASSWORD: ${RD_SFTPGO_ADMIN_PW:-}
-      # Verwaltung nur ueber die REST-Schnittstelle im internen Netz; die Weboberflaechen von SFTPGo bleiben aus
       SFTPGO_HTTPD__BINDINGS__0__PORT: "8080"
       SFTPGO_HTTPD__BINDINGS__0__ENABLE_WEB_ADMIN: "false"
       SFTPGO_HTTPD__BINDINGS__0__ENABLE_WEB_CLIENT: "false"
       SFTPGO_HTTPD__BINDINGS__0__ENABLE_REST_API: "true"
-      # WebDAV unter /webdav/ — erreichbar nur ueber RedDrop (das die echte Adresse in X-Forwarded-For mitgibt)
       SFTPGO_WEBDAVD__BINDINGS__0__PORT: "8090"
       SFTPGO_WEBDAVD__BINDINGS__0__PREFIX: /webdav
       SFTPGO_WEBDAVD__BINDINGS__0__PROXY_ALLOWED: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
