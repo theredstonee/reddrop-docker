@@ -1,18 +1,12 @@
 {
-  "version": "1.7.0",
-  "datum": "2026-11-01",
+  "version": "1.7.1",
+  "datum": "2026-11-02",
   "hinweise": {
     "de": [
-      "Neu: Auf einer Datei-Anfrage nehmen Gäste Sprachnachrichten und Videobotschaften direkt im Browser auf, ohne Konto. Mit Pause, Anhören vor dem Senden und Warnung bei stummem Mikrofon. Eine Aufnahme übersteht auch einen Abbruch oder ein Neuladen. Braucht HTTPS.",
-      "Je Anfrage abschaltbar, Höchstlänge wählbar: 1, 5, 15 oder 30 Minuten.",
-      "Gäste können eine Mitteilung zur Datei mitschicken. Sie steht in den Details, im neuen Eingang der Anfrage und in der Benachrichtigung.",
-      "Sprachnachrichten direkt in der Dateiliste abspielen. Aufnehmen geht auch im eigenen Konto über den Mikrofon-Knopf oben."
+      "Symbole haben überall eine feste Standardgröße und werden nicht mehr übergroß."
     ],
     "en": [
-      "New: on a file request, guests record voice and video messages right in the browser, without an account. With pause, listening before sending and a warning for a muted microphone. A recording even survives an interruption or a reload. Requires HTTPS.",
-      "Can be turned off per request, maximum length selectable: 1, 5, 15 or 30 minutes.",
-      "Guests can send a note with a file. It shows in the details, in the request's new inbox and in the notification.",
-      "Play voice messages right in the file list. Recording also works in your own account via the microphone button at the top."
+      "Icons have a fixed default size everywhere and no longer turn oversized."
     ]
   }
 }
