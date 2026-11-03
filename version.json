@@ -1,16 +1,24 @@
 {
-  "version": "1.8.1",
-  "datum": "2026-11-03",
+  "version": "1.8.2",
+  "datum": "2026-11-04",
   "hinweise": {
     "de": [
-      "Behoben: Beim Hinzufügen eines weiteren Servers konnte die Datenbank stehen bleiben, wenn auf dem Server Port 5432 schon belegt war. RedDrop nimmt jetzt automatisch einen freien Port.",
-      "Scheitert die Vorbereitung, stellt RedDrop den vorherigen Zustand von selbst wieder her.",
-      "Rote Knöpfe zeigen unter Speicher & Server wieder weiße Schrift."
+      "Neu: Server lassen sich unter Speicher & Server direkt verwalten, also umbenennen, neu starten und entfernen.",
+      "Neu: Weitere Server lassen sich mit einem Einzeiler wieder deinstallieren, samt Tunnel. Dateien und andere Tunnel bleiben.",
+      "Neu: Das Beitritts-Skript zeigt Logo, Fortschritt und Live-Protokoll.",
+      "Behoben: Der Knopf blieb beim ersten Server auf „wird vorbereitet“ stehen.",
+      "Behoben: Eine aktive Firewall sperrte den Datenordner, der neue Server hing dadurch beim Start.",
+      "Behoben: Bei falscher Adresse hängt der Beitritt nicht mehr, und der Tunnel wird wieder entfernt.",
+      "Behoben: Ein neu startender Server löscht keine laufende Arbeit anderer Server mehr."
     ],
     "en": [
-      "Fixed: Adding another server could leave the database stopped if port 5432 was already in use on the server. RedDrop now picks a free port automatically.",
-      "If the preparation fails, RedDrop restores the previous state by itself.",
-      "Red buttons under Storage & Servers show white text again."
+      "New: Servers can be managed directly under Storage & servers: rename, restart and remove.",
+      "New: Additional servers can be uninstalled with a one-liner, including the tunnel. Files and other tunnels stay.",
+      "New: The join script shows the logo, progress and a live log.",
+      "Fixed: The button stayed on “preparing” when adding the first server.",
+      "Fixed: An active firewall blocked the data folder, so the new server hung while starting.",
+      "Fixed: With a wrong address the join no longer hangs, and the tunnel is removed again.",
+      "Fixed: A restarting server no longer deletes running work of other servers."
     ]
   }
 }

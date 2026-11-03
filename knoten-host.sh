@@ -62,6 +62,19 @@ EOF
   fi
 }
 
+# Die Datenbank kommt über Docker durch, NFS läuft aber auf dem Host. Ohne Freigabe blockt die Firewall es,
+# und der neue Server wartet ewig auf den Datenordner. Nur im Tunnel, von außen bleibt der Port zu.
+nfs_im_tunnel_erlauben() {
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    ufw status | grep -q "2049/tcp on $WG" || ufw allow in on "$WG" to any port 2049 proto tcp comment 'RedDrop Knoten NFS' >/dev/null 2>&1 || true
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    firewall-cmd -q --permanent --direct --add-rule ipv4 filter INPUT 0 -i "$WG" -p tcp --dport 2049 -j ACCEPT 2>/dev/null || true
+    firewall-cmd -q --reload || true
+  elif command -v iptables >/dev/null 2>&1; then
+    iptables -C INPUT -i "$WG" -p tcp --dport 2049 -j ACCEPT 2>/dev/null || iptables -I INPUT -i "$WG" -p tcp --dport 2049 -j ACCEPT 2>/dev/null || true
+  fi
+}
+
 ordner_freigeben() {
   local quelle
   quelle=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$(docker compose ps -q app | head -1)" 2>/dev/null)
@@ -75,6 +88,7 @@ ordner_freigeben() {
     systemctl enable --now nfs-server >/dev/null 2>&1 || systemctl enable --now nfs-kernel-server >/dev/null 2>&1 || true
   fi
   exportfs -ra || fehler "Die NFS-Freigabe schlug fehl / NFS export failed"
+  nfs_im_tunnel_erlauben
   printf '%s' "$quelle"
 }
 
@@ -170,6 +184,7 @@ vorbereiten() {
 peer_eintragen() {
   local pub="$1" ip="$2"
   [ -f "$CONF" ] || fehler "Der Tunnel ist nicht eingerichtet / tunnel not set up"
+  [ -f "$EXPORTS" ] && nfs_im_tunnel_erlauben
   peer_austragen "$ip"
   wg set "$WG" peer "$pub" allowed-ips "$ip/32" || fehler "Der Server ließ sich nicht eintragen / could not add the server"
   printf '\n# knoten %s\n[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\n# ende %s\n' "$ip" "$pub" "$ip" "$ip" >> "$CONF"
