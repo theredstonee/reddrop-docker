@@ -78,18 +78,63 @@ ordner_freigeben() {
   printf '%s' "$quelle"
 }
 
+# Antwortet auf dieser Adresse schon etwas? Auch eine Datenbank des Servers auf allen Adressen zählt,
+# denn genau daran scheiterte Docker: "address already in use".
+port_belegt() {
+  timeout 2 bash -c "exec 3<>/dev/tcp/$NETZ.1/$1" 2>/dev/null
+}
+
+# Bleibt bei einem schon eingerichteten Port, sonst der Wunsch, sonst der erste freie aus der Reserve.
+port_waehlen() {
+  local innen="$1" wunsch="$2" reserve="$3" alt p
+  alt=$(sed -n "s/.*\"$NETZ\.1:\([0-9]*\):$innen\".*/\1/p" compose.tunnel.yml 2>/dev/null | head -1)
+  if [ -n "$alt" ] && grep -q '^COMPOSE_FILE=.*compose\.tunnel\.yml' .env; then
+    printf '%s' "$alt"
+    return 0
+  fi
+  for p in "$wunsch" $(seq "$reserve" $((reserve + 20))); do
+    if ! port_belegt "$p"; then
+      printf '%s' "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+DB_PORT=5432
+GARAGE_PORT=3900
+
+db_bereit() {
+  local i
+  for i in $(seq 1 30); do
+    docker compose exec -T db pg_isready -U reddrop -d reddrop >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+
+# Scheitert das Freigeben, kommt der alte Zustand zurück. Sonst stünde die Datenbank still,
+# und mit ihr die ganze Installation.
 compose_erweitern() {
-  local garage="" alt
+  local garage="" alt env_alt tunnel_alt=""
+  DB_PORT=$(port_waehlen 5432 5432 15432) || fehler "Für die Datenbank ist kein Port im Tunnel frei / no free tunnel port for the database"
   if grep -q '^COMPOSE_PROFILES=.*speicher' .env; then
+    GARAGE_PORT=$(port_waehlen 3900 3900 13900) || fehler "Für den Speicherdienst ist kein Port im Tunnel frei / no free tunnel port for the storage service"
     garage="  garage:
     ports:
-      - \"$NETZ.1:3900:3900\""
+      - \"$NETZ.1:$GARAGE_PORT:3900\""
+  fi
+  env_alt=$(mktemp)
+  cp -p .env "$env_alt"
+  if [ -f compose.tunnel.yml ]; then
+    tunnel_alt=$(mktemp)
+    cp -p compose.tunnel.yml "$tunnel_alt"
   fi
   cat > compose.tunnel.yml <<EOF
 services:
   db:
     ports:
-      - "$NETZ.1:5432:5432"
+      - "$NETZ.1:$DB_PORT:5432"
 $garage
 EOF
   alt=$(sed -n 's/^COMPOSE_FILE=//p' .env | tail -1)
@@ -97,13 +142,20 @@ EOF
     *:compose.tunnel.yml:*) ;;
     *) sed -i "s#^COMPOSE_FILE=.*#COMPOSE_FILE=$alt:compose.tunnel.yml#" .env ;;
   esac
-  docker compose up -d db ${garage:+garage} >/dev/null 2>&1 || fehler "Die Datenbank ließ sich nicht im Tunnel freigeben / could not expose the database in the tunnel"
+  if ! docker compose up -d db ${garage:+garage} >/dev/null 2>&1 || ! db_bereit; then
+    cp -p "$env_alt" .env
+    if [ -n "$tunnel_alt" ]; then cp -p "$tunnel_alt" compose.tunnel.yml; else rm -f compose.tunnel.yml; fi
+    rm -f "$env_alt" "$tunnel_alt"
+    docker compose up -d db ${garage:+garage} >/dev/null 2>&1 || true
+    fehler "Die Datenbank ließ sich nicht im Tunnel freigeben, der vorherige Zustand ist wiederhergestellt / could not expose the database in the tunnel, the previous state was restored"
+  fi
+  rm -f "$env_alt" "$tunnel_alt"
 }
 
 info_schreiben() {
   local paket=false
   [ -f .paket ] && paket=true
-  printf '{"pub":"%s","port":%s,"paket":%s,"nfsPfad":"%s"}\n' "$(wg show "$WG" public-key)" "$PORT" "$paket" "${1:-}" > "$DATEN/.knoten-tunnel"
+  printf '{"pub":"%s","port":%s,"paket":%s,"nfsPfad":"%s","dbPort":%s,"garagePort":%s}\n' "$(wg show "$WG" public-key)" "$PORT" "$paket" "${1:-}" "$DB_PORT" "$GARAGE_PORT" > "$DATEN/.knoten-tunnel"
   chmod 644 "$DATEN/.knoten-tunnel"
 }
 

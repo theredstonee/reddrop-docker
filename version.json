@@ -1,22 +1,16 @@
 {
-  "version": "1.8.0",
-  "datum": "2026-11-02",
+  "version": "1.8.1",
+  "datum": "2026-11-03",
   "hinweise": {
     "de": [
-      "Weitere Server per Link einbinden: Unter Speicher & Server entsteht ein Befehl mit Einmal-Token, der Docker und einen verschlüsselten WireGuard-Tunnel einrichtet (Pro).",
-      "Neue Upload-Anzeige mit echtem Fortschritt, Tempo und Restzeit.",
-      "Bei zu wenig Platz auf dem Server meldet der Upload das sofort. Das Zusammensetzen großer Dateien braucht auf knapper Platte nicht mehr den doppelten Platz.",
-      "Die Dateiliste aktualisiert sich live, auch bei Uploads von anderen Geräten oder Werkzeugen.",
-      "Fenster mit X schließen sich nicht mehr durch einen Klick daneben.",
-      "Neuer Installationsweg aus einem fertigen Paket, ohne Image aus dem Register."
+      "Behoben: Beim Hinzufügen eines weiteren Servers konnte die Datenbank stehen bleiben, wenn auf dem Server Port 5432 schon belegt war. RedDrop nimmt jetzt automatisch einen freien Port.",
+      "Scheitert die Vorbereitung, stellt RedDrop den vorherigen Zustand von selbst wieder her.",
+      "Rote Knöpfe zeigen unter Speicher & Server wieder weiße Schrift."
     ],
     "en": [
-      "Join more servers by link: Storage & servers creates a command with a one-time token that sets up Docker and an encrypted WireGuard tunnel (Pro).",
-      "New upload display with real progress, speed and time left.",
-      "If the server is short of space, the upload says so right away. Assembling large files no longer needs twice the space on a tight disk.",
-      "The file list updates live, also for uploads from other devices or tools.",
-      "Windows with an X no longer close when clicking beside them.",
-      "New way to install from a finished package, without an image from the registry."
+      "Fixed: Adding another server could leave the database stopped if port 5432 was already in use on the server. RedDrop now picks a free port automatically.",
+      "If the preparation fails, RedDrop restores the previous state by itself.",
+      "Red buttons under Storage & Servers show white text again."
     ]
   }
 }
