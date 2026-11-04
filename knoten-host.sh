@@ -7,6 +7,8 @@ CONF=/etc/wireguard/$WG.conf
 EXPORTS=/etc/exports.d/reddrop.exports
 WEB=.knoten-web
 NGINX_LB=/etc/nginx/conf.d/reddrop-knoten.conf
+GEW=.knoten-gewichte
+AUSFALL_AUS=.knoten-ohne-ausfall
 DATEN="${DATEN:-.}"
 
 fehler() { echo "$1" >&2; exit 1; }
@@ -197,32 +199,92 @@ peer_austragen() {
   sed -i "/^# knoten $ip\$/,/^# ende $ip\$/d" "$CONF" 2>/dev/null || true
 }
 
+# Gewicht eines Ziels (haupt oder Tunnel-Adresse). Ohne Eintrag zählen alle gleich.
+gewicht_von() {
+  local g=""
+  [ -f "$GEW" ] && g=$(sed -n "s/^$1 //p" "$GEW" | head -1)
+  case "$g" in ''|*[!0-9]*) echo 1 ;; *) echo "$g" ;; esac
+}
+mit_ausfall() { [ ! -f "$AUSFALL_AUS" ]; }
+
+# Caddy kennt mit Sitzungs-Cookie auch Gewichte. Für „nur als Ersatz“ (0 %) gibt es dort nur die feste Reihenfolge.
+caddy_block() {
+  local ziele="$1" einzug="$2" liste="" gew="" ersatz="" haupt ip g
+  haupt=$(gewicht_von haupt)
+  if [ "$haupt" -gt 0 ]; then liste="app:3000"; gew="$haupt"; else ersatz="app:3000"; fi
+  for ip in $ziele; do
+    g=$(gewicht_von "$ip")
+    if [ "$g" -gt 0 ]; then liste="$liste $ip:3000"; gew="$gew $g"; else ersatz="$ersatz $ip:3000"; fi
+  done
+  printf '%sreverse_proxy %s %s {\n' "$einzug" "$liste" "$ersatz"
+  if [ -n "$(echo "$ersatz" | tr -d ' ')" ]; then
+    printf '%s\tlb_policy first\n' "$einzug"
+  else
+    printf '%s\tlb_policy cookie {\n%s\t\tfallback weighted_round_robin %s\n%s\t}\n' "$einzug" "$einzug" "$gew" "$einzug"
+  fi
+  if mit_ausfall; then printf '%s\tfail_duration 30s\n%s\tmax_fails 3\n' "$einzug" "$einzug"; fi
+  printf '%s}\n' "$einzug"
+}
+
 web_verteilen() {
   local ziele="" port ip
   [ -f "$WEB" ] && ziele=$(tr '\n' ' ' < "$WEB")
   if grep -q 'compose.caddy.yml' .env; then
     [ -f Caddyfile.original ] || cp Caddyfile Caddyfile.original
+    local alt neu
+    alt=$(mktemp); neu=$(mktemp)
+    cp -p Caddyfile "$alt"
     if [ -n "$ziele" ]; then
-      local liste=""
-      for ip in $ziele; do liste="$liste $ip:3000"; done
-      sed -E "s#^([[:space:]]*)reverse_proxy app:3000[[:space:]]*\$#\1reverse_proxy app:3000$liste {\n\1\tlb_policy cookie\n\1}#" Caddyfile.original > Caddyfile
+      while IFS= read -r zeile || [ -n "$zeile" ]; do
+        case "$zeile" in
+          *'reverse_proxy app:3000'*) caddy_block "$ziele" "${zeile%%reverse_proxy*}" ;;
+          *) printf '%s\n' "$zeile" ;;
+        esac
+      done < Caddyfile.original > "$neu"
     else
-      cp Caddyfile.original Caddyfile
+      cp Caddyfile.original "$neu"
     fi
-    docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || fehler "Caddy ließ sich nicht neu laden / could not reload Caddy"
-    return 0
+    # In die vorhandene Datei schreiben: Sie ist einzeln in den Container eingebunden, ein Austausch käme dort nicht an.
+    cat "$neu" > Caddyfile
+    rm -f "$neu"
+    if docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
+      && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+      rm -f "$alt"
+      return 0
+    fi
+    cat "$alt" > Caddyfile
+    rm -f "$alt"
+    fehler "Caddy lehnt die neue Einstellung ab, die alte bleibt aktiv / Caddy rejected the change, the old one stays active"
   fi
   port=$(sed -n 's/^RD_PORT=//p' .env | tail -1)
   if command -v nginx >/dev/null 2>&1; then
     local datei
     datei=$(grep -rlE "proxy_pass[[:space:]]+http://(127\.0\.0\.1:$port|reddrop_knoten)" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | grep -v "$NGINX_LB" | head -1)
     [ -n "$datei" ] || fehler "Kein nginx-Eintrag für Port $port gefunden. Bitte die Server von Hand eintragen / no nginx entry for port $port, please add the servers by hand"
-    local sicherung="$datei.vor-knoten"
+    # Nicht neben dem vHost ablegen: nginx liest den ganzen Ordner ein und stolpert sonst über die Kopie.
+    local sicherung
+    sicherung=$(mktemp)
     cp -p "$datei" "$sicherung"
+    rm -f "$datei.vor-knoten"
     local lb_alt=""
     [ -f "$NGINX_LB" ] && lb_alt=$(cat "$NGINX_LB")
     if [ -n "$ziele" ]; then
-      { echo "upstream reddrop_knoten {"; echo "    ip_hash;"; echo "    server 127.0.0.1:$port;"; for ip in $ziele; do echo "    server $ip:3000;"; done; echo "}"; } > "$NGINX_LB"
+      # ip_hash und backup schließen sich in nginx aus. Gibt es einen Ersatz-Server, verteilt nginx ohne feste Zuordnung.
+      local ersatz="" g zusatz=" max_fails=0"
+      mit_ausfall && zusatz=" max_fails=3 fail_timeout=30s"
+      [ "$(gewicht_von haupt)" = 0 ] && ersatz=1
+      for ip in $ziele; do [ "$(gewicht_von "$ip")" = 0 ] && ersatz=1; done
+      {
+        echo "upstream reddrop_knoten {"
+        [ -n "$ersatz" ] || echo "    ip_hash;"
+        g=$(gewicht_von haupt)
+        if [ "$g" = 0 ]; then echo "    server 127.0.0.1:$port backup;"; else echo "    server 127.0.0.1:$port weight=$g$zusatz;"; fi
+        for ip in $ziele; do
+          g=$(gewicht_von "$ip")
+          if [ "$g" = 0 ]; then echo "    server $ip:3000 backup;"; else echo "    server $ip:3000 weight=$g$zusatz;"; fi
+        done
+        echo "}"
+      } > "$NGINX_LB"
       sed -i -E "s#proxy_pass[[:space:]]+http://127\.0\.0\.1:$port;#proxy_pass http://reddrop_knoten;#" "$datei"
     else
       rm -f "$NGINX_LB"
@@ -232,23 +294,53 @@ web_verteilen() {
       rm -f "$sicherung"
       return 0
     fi
-    mv -f "$sicherung" "$datei"
+    cat "$sicherung" > "$datei"
+    rm -f "$sicherung"
     if [ -n "$lb_alt" ]; then printf '%s\n' "$lb_alt" > "$NGINX_LB"; else rm -f "$NGINX_LB"; fi
     fehler "nginx lehnt die neue Einstellung ab, die alte bleibt aktiv / nginx rejected the change, the old one stays active"
   fi
   fehler "Dieser Webserver wird nicht automatisch angepasst. Bitte den Server von Hand im Lastverteiler eintragen / this web server is not adjusted automatically, please add the server to your load balancer by hand"
 }
 
+# Lehnt der Webserver ab, muss auch die gemerkte Liste wieder stimmen.
+web_liste_zurueck() {
+  if [ -n "$1" ]; then printf '%s\n' "$1" > "$WEB"; else : > "$WEB"; fi
+  exit 1
+}
+
 web_an() {
   touch "$WEB"
+  local alt
+  alt=$(cat "$WEB")
   grep -qxF "$1" "$WEB" || echo "$1" >> "$WEB"
-  web_verteilen
+  ( web_verteilen ) || web_liste_zurueck "$alt"
 }
 
 web_aus() {
   [ -f "$WEB" ] || return 0
+  local alt
+  alt=$(cat "$WEB")
   sed -i "/^$1\$/d" "$WEB"
-  web_verteilen
+  ( web_verteilen ) || web_liste_zurueck "$alt"
+}
+
+gewichte_setzen() {
+  local liste="$1" ausfall="${2:-1}" paar k v neu
+  neu=$(mktemp)
+  for paar in $(printf '%s' "$liste" | tr ',' ' '); do
+    k="${paar%%=*}"; v="${paar#*=}"
+    case "$k" in haupt|10.87.0.[0-9]*) ;; *) rm -f "$neu"; fehler "Ungültiger Server: $k" ;; esac
+    case "$v" in ''|*[!0-9]*) rm -f "$neu"; fehler "Ungültiges Gewicht: $v" ;; esac
+    echo "$k $v" >> "$neu"
+  done
+  cp -p "$GEW" "$neu.alt" 2>/dev/null || true
+  mv -f "$neu" "$GEW"
+  if [ "$ausfall" = 0 ]; then touch "$AUSFALL_AUS"; else rm -f "$AUSFALL_AUS"; fi
+  if [ -s "$WEB" ] && ! ( web_verteilen ); then
+    if [ -f "$neu.alt" ]; then mv -f "$neu.alt" "$GEW"; else rm -f "$GEW"; fi
+    exit 1
+  fi
+  rm -f "$neu.alt"
 }
 
 aktion="${1:-}"
@@ -259,7 +351,17 @@ case "$aktion" in
     peer_eintragen "$1" "$2"
     if [ "${3:-}" = "web" ]; then web_an "$2"; fi
     ;;
-  peer-weg) web_aus "$1" || true; peer_austragen "$1" ;;
+  peer-weg)
+    # Der Server geht in jedem Fall aus dem Tunnel. Lehnt der Webserver ab, kommt das als Fehler zurück.
+    rc=0
+    ( web_aus "$1" ) || rc=1
+    if [ -f "$WEB" ]; then sed -i "/^$1\$/d" "$WEB"; fi
+    peer_austragen "$1"
+    exit "$rc"
+    ;;
   web-neu) if [ -s "$WEB" ]; then web_verteilen; fi ;;
+  gewichte) gewichte_setzen "$1" "${2:-1}" ;;
+  web-an) web_an "$1" ;;
+  web-aus) web_aus "$1" ;;
   *) fehler "Unbekannte Aktion: $aktion" ;;
 esac

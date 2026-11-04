@@ -353,15 +353,20 @@ case "\${aktion:-update}" in
     if out=\$(docker compose stop sftpgo garage 2>&1 && docker compose rm -f sftpgo garage 2>&1); then profil aus speicher; status .speicher-status fertig ""
     else status .speicher-status fehler "\$(kurz "\$out")"; fi ;;
   webserver-info) ws_info_schreiben ;;
-  knoten-vorbereiten|knoten-peer|knoten-peer-weg)
+  knoten-vorbereiten|knoten-peer|knoten-peer-weg|knoten-verteilen|knoten-web-an|knoten-web-aus)
     status .knoten-status laeuft ""
     kpub=\$(printf '%s' "\$anfrage" | sed -n 's#.*"pub":"\([A-Za-z0-9+/=]*\)".*#\1#p' | head -c 44)
     kip=\$(printf '%s' "\$anfrage" | sed -n 's/.*"ip":"\(10\.87\.0\.[0-9]*\)".*/\1/p' | head -c 15)
     krolle=\$(printf '%s' "\$anfrage" | sed -n 's/.*"rolle":"\([a-z]*\)".*/\1/p' | head -c 10)
     knfs=\$(printf '%s' "\$anfrage" | sed -n 's/.*"nfs":"\([a-z]*\)".*/\1/p' | head -c 3)
+    kgew=\$(printf '%s' "\$anfrage" | sed -n 's/.*"gewichte":"\([a-z0-9.=,]*\)".*/\1/p' | head -c 800)
+    kaus=\$(printf '%s' "\$anfrage" | sed -n 's/.*"ausfall":"\([01]\)".*/\1/p' | head -c 1)
     case "\$aktion" in
       knoten-vorbereiten) kbef="vorbereiten \$knfs" ;;
       knoten-peer) kbef="peer \$kpub \$kip \$krolle" ;;
+      knoten-verteilen) kbef="gewichte \$kgew \$kaus" ;;
+      knoten-web-an) kbef="web-an \$kip" ;;
+      knoten-web-aus) kbef="web-aus \$kip" ;;
       *) kbef="peer-weg \$kip" ;;
     esac
     if out=\$(DATEN="\$DATEN" bash knoten-host.sh \$kbef 2>&1); then status .knoten-status fertig ""; else status .knoten-status fehler "\$(kurz "\$out")"; fi ;;
@@ -430,7 +435,7 @@ SKRIPT
     chmod 644 /etc/cron.d/reddrop-update; ausloeser="cron"
   fi
   [ -n "$ausloeser" ] || { DIENST_GRUND="$(s "Weder systemd noch cron laufen auf diesem Server – ohne einen davon kann der Knopf im Panel nichts ausloesen." "Neither systemd nor cron is running on this server – without one the panel button cannot trigger anything.")"; return 1; }
-  printf '%s\naktionen=update virenscan tunnel webserver speicher knoten\nstand=5\n' "$PWD" | ablegen "$daten/.updater" || { DIENST_GRUND="$(s "Die Marker-Datei $daten/.updater liess sich nicht anlegen (Datenordner kein echter Ordner?)." "Could not create the marker file $daten/.updater (data folder not a real folder?).")"; return 1; }
+  printf '%s\naktionen=update virenscan tunnel webserver speicher knoten verteilung\nstand=6\n' "$PWD" | ablegen "$daten/.updater" || { DIENST_GRUND="$(s "Die Marker-Datei $daten/.updater liess sich nicht anlegen (Datenordner kein echter Ordner?)." "Could not create the marker file $daten/.updater (data folder not a real folder?).")"; return 1; }
   { ws_info | ablegen "$daten/.webserver-info"; } 2>/dev/null || true
   say "==> Update-Dienst eingerichtet ($ausloeser; Panel → Version unten links → „Jetzt aktualisieren“)" "==> Update service set up ($ausloeser; panel → version at the bottom left → “Update now”)"
 }
