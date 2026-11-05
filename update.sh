@@ -3,7 +3,7 @@ set -uo pipefail
 {
 exec </dev/null
 QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"
-DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml knoten-host.sh Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml knoten-host.sh knoten-unraid.sh Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
 DIR="${RD_DIR:-}"; STATUS=""
 while [ $# -gt 0 ]; do
   case "$1" in

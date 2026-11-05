@@ -1,30 +1,18 @@
 {
-  "version": "1.9.0",
-  "datum": "2026-11-04",
+  "version": "1.9.1",
+  "datum": "2026-11-05",
   "hinweise": {
     "de": [
-      "Neu (Pro): Mehrere Speicherorte in einer festen Reihenfolge: dieser Server, S3-Buckets und weitere Server mit eigener Platte.",
-      "Neu (Pro): Regeln nach Größe, Dateityp und Ordner legen fest, wo neue Dateien landen, auch als Kopien an mehreren Orten. Ohne Regeln bleibt alles wie bisher.",
-      "Neu (Pro): Automatik mit Selbstreparatur der Kopien, Auslagern bei voller Platte, Verschieben selten genutzter Dateien nach S3 und Leerziehen eines Speicherorts mit Pause. Links bleiben gleich.",
-      "Neu (Pro): Besucher lassen sich mit Gewichten auf die Server verteilen, mit automatischem Ausfallwechsel. Alle Besucher kommen weiter über den Hauptserver, und auch die Daten laufen durch seine Leitung. Entlasten können ihn nur Downloads direkt aus S3.",
-      "Neu (Pro): Weitere Server lassen sich per Knopf aktualisieren. Server, die vor dieser Fassung beigetreten sind, brauchen dafür einmal den Einzeiler aus dem Reiter Besucher.",
-      "Neu (Pro): Im Datei-Fenster siehst du, wo eine Datei liegt, und kannst ihre Ablage ändern und reparieren.",
-      "Behoben: Eine fehlende Datei lässt die Sicherung nicht mehr hängen. Sie läuft durch und nennt die fehlenden Dateien.",
-      "Robuster: Auch der Galerie-Download läuft bei einer fehlenden Datei durch, diese Datei bleibt darin leer.",
-      "Behoben: Das Trennen eines Servers scheiterte unter nginx an einer Sicherungskopie im Ordner von nginx. Der Server blieb dadurch im Tunnel.",
-      "Sicherer: Schreibzugriffe zwischen den Servern tragen eine Einmal-Kennung und lassen sich nicht wiederholen."
+      "Neu (Pro, Beta): Weitere Server lassen sich auch auf Unraid automatisch einbinden, und auch der Hauptserver darf auf Unraid laufen. Tunnel und Autostart liegen auf dem USB-Stick und überstehen Neustarts.",
+      "Beta heißt: Das lief bisher nur in einer Nachbildung, noch nie auf echtem Unraid und mit echtem NFS. Teste es zuerst an einem unwichtigen Server und ziehe vorher eine Sicherung.",
+      "Auf Unraid im Terminal als root ausführen und im angezeigten Befehl `| bash` statt `| sudo bash` nutzen.",
+      "Behoben: Scheiterte die NFS-Freigabe beim Vorbereiten des Hauptservers, wurde das nicht gemeldet."
     ],
     "en": [
-      "New (Pro): Several storage locations in a fixed order: this server, S3 buckets and other servers with their own disk.",
-      "New (Pro): Rules by size, file type and folder decide where new files go, also as copies in several places. Without rules everything stays as it was.",
-      "New (Pro): Automation with self-repair of copies, offloading when a disk gets full, moving rarely used files to S3 and emptying a location with pause. Links stay the same.",
-      "New (Pro): Visitors can be shared across servers with weights and automatic failover. All visitors still come in through the main server, and the data runs through its connection as well. Only direct downloads from S3 take load off it.",
-      "New (Pro): Other servers can be updated by button. Servers that joined before this version need the one-liner from the Visitors tab once.",
-      "New (Pro): The file window shows where a file lives and lets you change and repair its storage.",
-      "Fixed: A missing file no longer makes the backup hang. It finishes and names the missing files.",
-      "More robust: The gallery download also finishes when a file is missing, that file stays empty in it.",
-      "Fixed: Disconnecting a server failed under nginx because of a backup copy in the nginx folder. The server stayed in the tunnel as a result.",
-      "Safer: Write requests between servers carry a one-time ID and cannot be replayed."
+      "New (Pro, beta): Additional servers can now join automatically on Unraid, and the main server can run on Unraid too. Tunnel and autostart live on the USB stick and survive reboots.",
+      "Beta means: So far this only ran in a replica, never on real Unraid and with real NFS. Try it on an unimportant server first and take a backup beforehand.",
+      "On Unraid, run it in the terminal as root and use `| bash` instead of `| sudo bash` in the command shown.",
+      "Fixed: a failed NFS export while preparing the main server was not reported."
     ]
   }
 }

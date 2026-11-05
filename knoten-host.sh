@@ -10,6 +10,10 @@ NGINX_LB=/etc/nginx/conf.d/reddrop-knoten.conf
 GEW=.knoten-gewichte
 AUSFALL_AUS=.knoten-ohne-ausfall
 DATEN="${DATEN:-.}"
+ist_unraid() { [ -f /etc/unraid-version ] && [ -d /boot/config ]; }
+ur_sichern() { :; }
+# Fehlt die Datei nach einem Update ohne sie, bleibt es beim klaren Fehler weiter unten.
+[ -f knoten-unraid.sh ] && . ./knoten-unraid.sh
 
 fehler() { echo "$1" >&2; exit 1; }
 
@@ -30,7 +34,10 @@ pakete() {
 }
 
 tunnel_aufbauen() {
-  [ -f /etc/unraid-version ] && fehler "Unraid wird für den automatischen Beitritt nicht unterstützt / Unraid is not supported for automatic joining"
+  if ist_unraid; then
+    command -v ur_einrichten >/dev/null 2>&1 || fehler "knoten-unraid.sh fehlt, bitte RedDrop aktualisieren / knoten-unraid.sh is missing, please update RedDrop"
+    command -v wg-quick >/dev/null 2>&1 || fehler "WireGuard fehlt, Unraid bringt es ab Version 6.8 mit / WireGuard is missing, Unraid includes it from version 6.8"
+  fi
   command -v wg-quick >/dev/null 2>&1 || pakete wireguard-tools || fehler "WireGuard ließ sich nicht installieren / could not install WireGuard"
   command -v iptables >/dev/null 2>&1 || pakete iptables || true
   mkdir -p /etc/wireguard && chmod 700 /etc/wireguard
@@ -38,13 +45,16 @@ tunnel_aufbauen() {
     local schluessel
     schluessel=$(wg genkey)
     umask 077
+    # Unraid bedient über NFS oft auch das Heimnetz. Die Sperre von außen träfe dort die eigenen Freigaben, und die Freigabe gilt ohnehin nur für den Tunnel.
+    local sperre_an="iptables -I INPUT -p tcp --dport 2049 ! -i $WG -j DROP; " sperre_aus="iptables -D INPUT -p tcp --dport 2049 ! -i $WG -j DROP || true; "
+    if ist_unraid; then sperre_an=""; sperre_aus=""; fi
     cat > "$CONF" <<EOF
 [Interface]
 Address = $NETZ.1/24
 ListenPort = $PORT
 PrivateKey = $schluessel
-PostUp = iptables -I INPUT -p tcp --dport 2049 ! -i $WG -j DROP; iptables -t nat -A POSTROUTING -o $WG -j MASQUERADE; iptables -I DOCKER-USER -o $WG -j ACCEPT || true; iptables -I DOCKER-USER -i $WG -j ACCEPT || true
-PostDown = iptables -D INPUT -p tcp --dport 2049 ! -i $WG -j DROP || true; iptables -t nat -D POSTROUTING -o $WG -j MASQUERADE || true; iptables -D DOCKER-USER -o $WG -j ACCEPT || true; iptables -D DOCKER-USER -i $WG -j ACCEPT || true
+PostUp = ${sperre_an}iptables -t nat -A POSTROUTING -o $WG -j MASQUERADE; iptables -I DOCKER-USER -o $WG -j ACCEPT || true; iptables -I DOCKER-USER -i $WG -j ACCEPT || true
+PostDown = ${sperre_aus}iptables -t nat -D POSTROUTING -o $WG -j MASQUERADE || true; iptables -D DOCKER-USER -o $WG -j ACCEPT || true; iptables -D DOCKER-USER -i $WG -j ACCEPT || true
 EOF
   fi
   if ! ip link show "$WG" >/dev/null 2>&1; then
@@ -81,7 +91,14 @@ ordner_freigeben() {
   local quelle
   quelle=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$(docker compose ps -q app | head -1)" 2>/dev/null)
   [ -d "$quelle" ] || fehler "Der Datenordner wurde nicht gefunden / data folder not found"
-  if ! command -v exportfs >/dev/null 2>&1; then
+  if ist_unraid; then
+    command -v exportfs >/dev/null 2>&1 || fehler "exportfs fehlt / exportfs is missing"
+    if ! pgrep -x nfsd >/dev/null 2>&1; then
+      [ -x /etc/rc.d/rc.nfsd ] && /etc/rc.d/rc.nfsd start >/dev/null 2>&1
+      sleep 2
+      pgrep -x nfsd >/dev/null 2>&1 || fehler "NFS läuft nicht. Bitte in Unraid unter Einstellungen > NFS einschalten / NFS is not running. Please enable it in Unraid under Settings > NFS"
+    fi
+  elif ! command -v exportfs >/dev/null 2>&1; then
     pakete nfs-kernel-server || pakete nfs-utils || fehler "Der NFS-Dienst ließ sich nicht installieren / could not install NFS"
   fi
   mkdir -p /etc/exports.d
@@ -178,9 +195,11 @@ info_schreiben() {
 vorbereiten() {
   local nfs="${1:-}" pfad=""
   tunnel_aufbauen
-  [ "$nfs" = "nfs" ] && pfad=$(ordner_freigeben)
+  # Ohne das exit liefe die Vorbereitung bei gescheiterter Freigabe weiter, und der neue Server arbeitete still ohne die Dateien.
+  if [ "$nfs" = "nfs" ]; then pfad=$(ordner_freigeben) || exit 1; fi
   compose_erweitern
   info_schreiben "$pfad"
+  if ist_unraid; then ur_einrichten "$PWD" >/dev/null || fehler "Auf dem USB-Stick ließ sich nichts einrichten / could not set up anything on the USB stick"; fi
 }
 
 peer_eintragen() {
@@ -190,6 +209,7 @@ peer_eintragen() {
   peer_austragen "$ip"
   wg set "$WG" peer "$pub" allowed-ips "$ip/32" || fehler "Der Server ließ sich nicht eintragen / could not add the server"
   printf '\n# knoten %s\n[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\n# ende %s\n' "$ip" "$pub" "$ip" "$ip" >> "$CONF"
+  ur_sichern
 }
 
 peer_austragen() {
@@ -197,6 +217,7 @@ peer_austragen() {
   alt=$(wg show "$WG" allowed-ips 2>/dev/null | awk -v i="$ip/32" '$2 == i {print $1}')
   [ -n "$alt" ] && wg set "$WG" peer "$alt" remove
   sed -i "/^# knoten $ip\$/,/^# ende $ip\$/d" "$CONF" 2>/dev/null || true
+  ur_sichern
 }
 
 # Gewicht eines Ziels (haupt oder Tunnel-Adresse). Ohne Eintrag zählen alle gleich.

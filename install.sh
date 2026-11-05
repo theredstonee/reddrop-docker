@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 QUELLE="${RD_QUELLE:-https://raw.githubusercontent.com/theredstonee/reddrop-docker/main}"
-DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml knoten-host.sh Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
+DATEIEN="docker-compose.yml compose.caddy.yml compose.port.yml compose.node.yml knoten-host.sh knoten-unraid.sh Caddyfile garage.toml install.sh update.sh .env.example README.md version.json"
 unraid_ziel() {
   [ -f /etc/unraid-version ] && [ -d /mnt/user ] || return 1
   case "$1" in /mnt/*|/boot/*) return 1 ;; esac
@@ -218,6 +218,10 @@ if [ -n "$WEG" ]; then
   if [ -d /boot/config/plugins/reddrop ]; then
     rm -rf /boot/config/plugins/reddrop /boot/config/plugins/dynamix/reddrop-update.cron /usr/local/bin/reddrop-update
     [ -x /usr/local/sbin/update_cron ] && /usr/local/sbin/update_cron >/dev/null 2>&1
+  fi
+  # Hauptserver im Verbund auf Unraid: Sonst käme der Tunnel beim nächsten Start vom USB-Stick zurück.
+  if [ -d /boot/config/plugins/reddrop-knoten ] && [ -f knoten-unraid.sh ]; then
+    ( set +eu; . ./knoten-unraid.sh; wg-quick down rd0 >/dev/null 2>&1; rm -f /etc/wireguard/rd0.conf /etc/exports.d/reddrop.exports; exportfs -ra >/dev/null 2>&1; ur_weg ) || true
   fi
   stempel=$(date +%Y%m%d-%H%M%S); neu_laden=""
   for datei in /etc/nginx/sites-enabled/reddrop.conf /etc/nginx/sites-enabled/reddrop-setup.conf /etc/nginx/sites-available/reddrop.conf /etc/nginx/sites-available/reddrop-setup.conf \

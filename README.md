@@ -215,6 +215,8 @@ Seite **Import** im Panel. Es gibt drei Wege:
 
    Der Schlüssel braucht die Rechte Lesen, Schreiben, Löschen und Auflisten für den Bucket.
 3. **Weitere Server:** siehe `compose.node.yml`. Die Server teilen sich die Datenbank des ersten Servers. Dateien liegen in S3 oder auf einem gemeinsamen Laufwerk (NFS). Im Lastverteiler die Sitzungsbindung einschalten.
+
+   **Unraid (Beta):** Weitere Server lassen sich auch auf Unraid automatisch einbinden, und der Hauptserver darf auf Unraid laufen. Das lief bisher nur in einer Nachbildung, noch nie auf echtem Unraid und mit echtem NFS. Teste es zuerst an einem unwichtigen Server und ziehe vorher eine Sicherung. Array und Docker müssen laufen. Führe den Befehl aus dem Panel im Unraid-Terminal als root aus und nutze `| bash` statt `| sudo bash`. Ein anderer Ordner für die eigene Platte: `RD_KNOTEN_EIGEN=/mnt/user/ordner` vor `bash` setzen. Entfernen: `bash /mnt/user/appdata/reddrop-knoten/entfernen.sh`.
 4. **SSO:** Panel → **Anmeldung (SSO)** → Anbieter hinzufügen. Die angezeigte **Rücksprung-Adresse** beim Anbieter eintragen.
 5. **Eigene Marke:** Panel → **Eigene Marke**. Name und Akzentfarbe stehen unter Einstellungen → Installation.
 
