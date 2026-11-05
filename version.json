@@ -1,18 +1,20 @@
 {
-  "version": "1.9.1",
+  "version": "1.9.2",
   "datum": "2026-11-05",
   "hinweise": {
     "de": [
-      "Neu (Pro, Beta): Weitere Server lassen sich auch auf Unraid automatisch einbinden, und auch der Hauptserver darf auf Unraid laufen. Tunnel und Autostart liegen auf dem USB-Stick und überstehen Neustarts.",
-      "Beta heißt: Das lief bisher nur in einer Nachbildung, noch nie auf echtem Unraid und mit echtem NFS. Teste es zuerst an einem unwichtigen Server und ziehe vorher eine Sicherung.",
-      "Auf Unraid im Terminal als root ausführen und im angezeigten Befehl `| bash` statt `| sudo bash` nutzen.",
-      "Behoben: Scheiterte die NFS-Freigabe beim Vorbereiten des Hauptservers, wurde das nicht gemeldet."
+      "Neu: RedDrop verbindet sich mit RedNetz. Dort erscheint dein Verbund als Gruppe mit Hauptserver, weiteren Servern, Speicher und Alarmen. Im Panel unter Speicher & Server siehst du den Zustand aus RedNetz.",
+      "So geht es: In RedNetz einen Token mit produkt:lesen anlegen und in RedDrop unter Speicher & Server eintragen. In RedDrop einen Lese-Token anlegen und in RedNetz unter Anbindungen eintragen. Geteilt wird nur der Zustand, keine Dateinamen und keine Nutzerdaten.",
+      "Beim Einladen eines weiteren Servers kann der RedNetz-Agent mit drauf, nur wenn du zustimmst. Scheitert er, tritt der Server trotzdem bei.",
+      "Pro: Weitere Server lassen sich aus RedNetz neu starten und aktualisieren. Das ist standardmäßig aus und steht im Protokoll.",
+      "Behoben: Der Beitritt meldete ohne Terminal (zum Beispiel per Ansible) einen Fehler zu /dev/tty, obwohl er durchlief."
     ],
     "en": [
-      "New (Pro, beta): Additional servers can now join automatically on Unraid, and the main server can run on Unraid too. Tunnel and autostart live on the USB stick and survive reboots.",
-      "Beta means: So far this only ran in a replica, never on real Unraid and with real NFS. Try it on an unimportant server first and take a backup beforehand.",
-      "On Unraid, run it in the terminal as root and use `| bash` instead of `| sudo bash` in the command shown.",
-      "Fixed: a failed NFS export while preparing the main server was not reported."
+      "New: RedDrop connects to RedNetz. Your cluster appears there as a group with the main server, additional servers, storage and alerts. The panel shows the state from RedNetz under Storage & servers.",
+      "How it works: Create a token with produkt:lesen in RedNetz and enter it in RedDrop under Storage & servers. Create a read token in RedDrop and enter it in RedNetz under Connections. Only the state is shared, no file names or user data.",
+      "When inviting another server, the RedNetz agent can be set up too, only if you agree. If that fails, the server still joins.",
+      "Pro: Additional servers can be restarted and updated from RedNetz. This is off by default and logged.",
+      "Fixed: Joining without a terminal (for example with Ansible) reported a /dev/tty error even though it finished."
     ]
   }
 }

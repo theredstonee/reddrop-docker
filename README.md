@@ -193,6 +193,20 @@ scrape_configs:
 
 Laufen mehrere Server, jeden einzeln abfragen (jeder zählt seine eigenen Anfragen). Das Grafana-Dashboard gibt es auf derselben Seite zum Herunterladen.
 
+## Mit RedNetz verbinden
+
+[RedNetz](https://www.theredstonee.de/rednetz/) zeigt deine Server, Ports, Docker, Domains und Logs an einer Stelle. RedDrop erscheint dort als Verbund mit Hauptserver, weiteren Servern, Speicher und Alarmen. Geteilt wird nur der Zustand, keine Dateinamen und keine Nutzerdaten.
+
+1. In RedNetz unter **API** einen Token mit den Bereichen `produkt:lesen` und, falls der Agent beim Beitritt mitkommen soll, `produkt:agent` anlegen.
+2. In RedDrop unter **Speicher & Server** die Adresse von RedNetz und den Token eintragen.
+3. Dort einen **Lese-Token** anlegen und in RedNetz unter **Anbindungen** bei RedDrop eintragen.
+
+Die Tokens liegen in RedDrop verschlüsselt. Ändert sich das Datenbank-Passwort, musst du RedNetz neu verbinden.
+
+**Agent beim Beitritt:** Beim Einladen eines weiteren Servers kann der RedNetz-Agent mit installiert werden, nur wenn du zustimmst. Scheitert das, tritt der Server trotzdem bei.
+
+**Aktionen (Pro):** Weitere Server lassen sich aus RedNetz neu starten und aktualisieren. Das ist standardmäßig aus, braucht einen eigenen **Aktions-Token** und steht im Protokoll.
+
 ## Umzug aus einem anderen Dienst
 
 Seite **Import** im Panel. Es gibt drei Wege:
