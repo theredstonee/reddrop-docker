@@ -1,16 +1,14 @@
 {
-  "version": "1.11.0",
+  "version": "1.11.1",
   "datum": "2026-11-08",
   "hinweise": {
     "de": [
-      "Neu (Beta, Pro): Weitere Server lassen sich jetzt auch über Tailscale anbinden. Das hilft bei Servern hinter NAT, im Heimnetz oder ohne offenen Port. Unter Speicher & Server → Weiteren Server hinzufügen wählst du „Tailscale“.",
-      "Ist ein Server schon in deinem Tailnet, ändert RedDrop nichts an der Verbindung. Sonst meldet er sich mit einem verschlüsselt gespeicherten Auth-Key an oder über einen Link, den du einmal bestätigst. Ein eigener Steuerserver (Headscale) wird ebenfalls unterstützt.",
-      "Datenbank, Speicherdienst und Datenordner werden nur für die Tailscale-Adressen deiner Server freigegeben, nicht für das ganze Tailnet. Läuft der Tailscale-Schlüssel eines Servers bald ab, warnt RedDrop 14 Tage vorher und zeigt, was zu tun ist."
+      "Externe Server „nicht auflösbar“, obwohl der Name auf dem Server selbst funktioniert: Scheitert das DNS im Container (etwa weil der Server einen lokalen Resolver nutzt oder der Weg nach außen gesperrt ist), fragt RedDrop jetzt direkt öffentliche DNS-Server und merkt sich die letzte funktionierende Adresse. Das gilt für alle Verbindungen nach außen, etwa RedNetz, Speicher-Anbieter und Webhooks.",
+      "Im Container-Log steht dann, welcher Name über den Ausweg aufgelöst wurde. Abschalten lässt sich das mit DNS_AUSWEICH=0 in der .env."
     ],
     "en": [
-      "New (beta, Pro): additional servers can now also be connected via Tailscale. This helps with servers behind NAT, in a home network or without an open port. Under Storage & servers → Add another server, choose “Tailscale”.",
-      "If a server is already in your tailnet, RedDrop changes nothing about the connection. Otherwise it signs in with an auth key stored encrypted, or via a link you confirm once. Your own control server (Headscale) is supported as well.",
-      "Database, storage service and data folder are opened only to the Tailscale addresses of your servers, not to the whole tailnet. If a server's Tailscale key is about to expire, RedDrop warns 14 days ahead and shows what to do."
+      "External servers “cannot be resolved” although the name works on the server itself: if DNS fails inside the container (for example because the server uses a local resolver or outbound DNS is blocked), RedDrop now asks public DNS servers directly and remembers the last working address. This applies to all outgoing connections, such as RedNetz, storage providers and webhooks.",
+      "The container log then shows which name was resolved through the fallback. It can be turned off with DNS_AUSWEICH=0 in the .env."
     ]
   }
 }
