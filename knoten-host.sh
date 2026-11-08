@@ -5,6 +5,12 @@ NETZ=10.87.0
 PORT=51877
 CONF=/etc/wireguard/$WG.conf
 EXPORTS=/etc/exports.d/reddrop.exports
+# Tailscale (1.11.0): Freigaben und Firewall je Server-IP, nie fürs ganze Tailnet
+TS_INFO=.knoten-ts
+TS_EXPORTS=/etc/exports.d/reddrop-ts.exports
+TS_ORDNER=/etc/reddrop
+TS_ERLAUBT=$TS_ORDNER/ts-erlaubt
+TS_FW=/usr/local/bin/reddrop-ts-firewall
 WEB=.knoten-web
 NGINX_LB=/etc/nginx/conf.d/reddrop-knoten.conf
 GEW=.knoten-gewichte
@@ -87,10 +93,24 @@ nfs_im_tunnel_erlauben() {
   fi
 }
 
+daten_quelle() {
+  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$(docker compose ps -q app | head -1)" 2>/dev/null
+}
+
 ordner_freigeben() {
   local quelle
-  quelle=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$(docker compose ps -q app | head -1)" 2>/dev/null)
+  quelle=$(daten_quelle)
   [ -d "$quelle" ] || fehler "Der Datenordner wurde nicht gefunden / data folder not found"
+  nfs_dienst
+  mkdir -p /etc/exports.d
+  printf '"%s" %s.0/24(rw,sync,no_subtree_check,no_root_squash,fsid=87)\n' "$quelle" "$NETZ" > "$EXPORTS"
+  exportfs -ra || fehler "Die NFS-Freigabe schlug fehl / NFS export failed"
+  nfs_im_tunnel_erlauben
+  printf '%s' "$quelle"
+}
+
+# NFS-Dienst bereitstellen (WireGuard und Tailscale), ohne selbst etwas freizugeben.
+nfs_dienst() {
   if ist_unraid; then
     command -v exportfs >/dev/null 2>&1 || fehler "exportfs fehlt / exportfs is missing"
     if ! pgrep -x nfsd >/dev/null 2>&1; then
@@ -101,26 +121,31 @@ ordner_freigeben() {
   elif ! command -v exportfs >/dev/null 2>&1; then
     pakete nfs-kernel-server || pakete nfs-utils || fehler "Der NFS-Dienst ließ sich nicht installieren / could not install NFS"
   fi
-  mkdir -p /etc/exports.d
-  printf '"%s" %s.0/24(rw,sync,no_subtree_check,no_root_squash,fsid=87)\n' "$quelle" "$NETZ" > "$EXPORTS"
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl enable --now nfs-server >/dev/null 2>&1 || systemctl enable --now nfs-kernel-server >/dev/null 2>&1 || true
   fi
-  exportfs -ra || fehler "Die NFS-Freigabe schlug fehl / NFS export failed"
-  nfs_im_tunnel_erlauben
-  printf '%s' "$quelle"
 }
 
 # Antwortet auf dieser Adresse schon etwas? Auch eine Datenbank des Servers auf allen Adressen zählt,
 # denn genau daran scheiterte Docker: "address already in use".
 port_belegt() {
-  timeout 2 bash -c "exec 3<>/dev/tcp/$NETZ.1/$1" 2>/dev/null
+  local a
+  for a in $(bind_adressen); do timeout 2 bash -c "exec 3<>/dev/tcp/$a/$1" 2>/dev/null && return 0; done
+  return 1
+}
+
+# An diese Adressen binden Datenbank und Speicherdienst: WireGuard (10.87.0.1) und/oder Tailscale (100.x).
+ts_eigene_ip() { [ -f "$TS_INFO" ] && sed -n 's/.*"ip":"\([0-9.]*\)".*/\1/p' "$TS_INFO" | head -1; }
+bind_adressen() {
+  [ -f "$CONF" ] && printf '%s.1\n' "$NETZ"
+  ts_eigene_ip
+  return 0
 }
 
 # Bleibt bei einem schon eingerichteten Port, sonst der Wunsch, sonst der erste freie aus der Reserve.
 port_waehlen() {
   local innen="$1" wunsch="$2" reserve="$3" alt p
-  alt=$(sed -n "s/.*\"$NETZ\.1:\([0-9]*\):$innen\".*/\1/p" compose.tunnel.yml 2>/dev/null | head -1)
+  alt=$(sed -n "s/.*\"[0-9.]*:\([0-9]*\):$innen\".*/\1/p" compose.tunnel.yml 2>/dev/null | head -1)
   if [ -n "$alt" ] && grep -q '^COMPOSE_FILE=.*compose\.tunnel\.yml' .env; then
     printf '%s' "$alt"
     return 0
@@ -151,11 +176,19 @@ db_bereit() {
 compose_erweitern() {
   local garage="" alt env_alt tunnel_alt=""
   DB_PORT=$(port_waehlen 5432 5432 15432) || fehler "Für die Datenbank ist kein Port im Tunnel frei / no free tunnel port for the database"
+  local adressen a db_zeilen="" garage_zeilen=""
+  adressen=$(bind_adressen)
+  [ -n "$adressen" ] || fehler "Weder WireGuard noch Tailscale ist eingerichtet / neither WireGuard nor Tailscale is set up"
+  for a in $adressen; do db_zeilen="$db_zeilen      - \"$a:$DB_PORT:5432\"
+"; done
   if grep -q '^COMPOSE_PROFILES=.*speicher' .env; then
     GARAGE_PORT=$(port_waehlen 3900 3900 13900) || fehler "Für den Speicherdienst ist kein Port im Tunnel frei / no free tunnel port for the storage service"
+    for a in $adressen; do garage_zeilen="$garage_zeilen      - \"$a:$GARAGE_PORT:3900\"
+"; done
     garage="  garage:
     ports:
-      - \"$NETZ.1:$GARAGE_PORT:3900\""
+${garage_zeilen%
+}"
   fi
   env_alt=$(mktemp)
   cp -p .env "$env_alt"
@@ -167,7 +200,8 @@ compose_erweitern() {
 services:
   db:
     ports:
-      - "$NETZ.1:$DB_PORT:5432"
+${db_zeilen%
+}
 $garage
 EOF
   alt=$(sed -n 's/^COMPOSE_FILE=//p' .env | tail -1)
@@ -188,7 +222,10 @@ EOF
 info_schreiben() {
   local paket=false
   [ -f .paket ] && paket=true
-  printf '{"pub":"%s","port":%s,"paket":%s,"nfsPfad":"%s","dbPort":%s,"garagePort":%s}\n' "$(wg show "$WG" public-key)" "$PORT" "$paket" "${1:-}" "$DB_PORT" "$GARAGE_PORT" > "$DATEN/.knoten-tunnel"
+  local pub="" ts
+  [ -f "$CONF" ] && pub=$(wg show "$WG" public-key 2>/dev/null)
+  ts=$(ts_eigene_ip)
+  printf '{"pub":"%s","port":%s,"paket":%s,"nfsPfad":"%s","dbPort":%s,"garagePort":%s,"ts":"%s"}\n' "$pub" "$PORT" "$paket" "${1:-}" "$DB_PORT" "$GARAGE_PORT" "$ts" > "$DATEN/.knoten-tunnel"
   chmod 644 "$DATEN/.knoten-tunnel"
 }
 
@@ -350,7 +387,7 @@ gewichte_setzen() {
   neu=$(mktemp)
   for paar in $(printf '%s' "$liste" | tr ',' ' '); do
     k="${paar%%=*}"; v="${paar#*=}"
-    case "$k" in haupt|10.87.0.[0-9]*) ;; *) rm -f "$neu"; fehler "Ungültiger Server: $k" ;; esac
+    case "$k" in haupt|10.87.0.[0-9]*|100.[0-9]*.[0-9]*.[0-9]*) ;; *) rm -f "$neu"; fehler "Ungültiger Server: $k" ;; esac
     case "$v" in ''|*[!0-9]*) rm -f "$neu"; fehler "Ungültiges Gewicht: $v" ;; esac
     echo "$k $v" >> "$neu"
   done
@@ -362,6 +399,178 @@ gewichte_setzen() {
     exit 1
   fi
   rm -f "$neu.alt"
+}
+
+# ---------- Tailscale (1.11.0) ----------
+# Ein vorhandenes Tailnet bleibt unangetastet: nur status/ip lesen, nie „up --reset“, Exit-Node und DNS bleiben.
+mit_systemd() { command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; }
+ts_laeuft() { tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"'; }
+ts_ip() { tailscale ip -4 2>/dev/null | head -1; }
+ts_gueltige_ip() { case "$1" in 100.[0-9]*.[0-9]*.[0-9]*) [ "$(printf '%s' "$1" | tr -cd '.' | wc -c)" = 3 ] ;; *) return 1 ;; esac; }
+
+ts_installieren() {
+  command -v tailscale >/dev/null 2>&1 && return 0
+  ist_unraid && fehler "Unraid: Bitte das offizielle Tailscale-Plugin installieren und anmelden, dann erneut versuchen / please install and sign in with the official Tailscale plugin, then try again"
+  command -v curl >/dev/null 2>&1 || pakete curl || true
+  curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1 || fehler "Tailscale ließ sich nicht installieren / could not install Tailscale"
+  if mit_systemd; then systemctl enable --now tailscaled >/dev/null 2>&1 || true; fi
+  touch "$TS_ORDNER/von-reddrop-installiert" 2>/dev/null || { mkdir -p "$TS_ORDNER" && touch "$TS_ORDNER/von-reddrop-installiert"; }
+}
+
+# Anmelde-Link fürs Panel: der Update-Dienst schreibt danach selbst „fertig“ oder „fehler“.
+ts_link_melden() {
+  printf '{"status":"laeuft","link":"%s","zeit":"%s"}\n' "$1" "$(date -Is)" > "$DATEN/.knoten-status.neu" && mv -f "$DATEN/.knoten-status.neu" "$DATEN/.knoten-status"
+  chmod 644 "$DATEN/.knoten-status" 2>/dev/null || true
+}
+
+ts_anmelden() {
+  local key="$1" ls="$2" name log i url=""
+  name="reddrop-$(hostname | tr -cd 'A-Za-z0-9-' | cut -c1-30)"
+  local args=(up --accept-dns=false "--hostname=$name")
+  [ -n "$ls" ] && args+=("--login-server=$ls")
+  if [ -n "$key" ] && [ -s "$key" ]; then
+    if ! tailscale "${args[@]}" "--auth-key=file:$key" --timeout=90s >/dev/null 2>&1; then
+      rm -f "$key"
+      fehler "Die Tailscale-Anmeldung mit dem Schlüssel schlug fehl. Ist er gültig und nicht abgelaufen? / Tailscale sign-in with the key failed. Is it valid and not expired?"
+    fi
+    rm -f "$key"
+    return 0
+  fi
+  rm -f "$key"
+  log=$(mktemp)
+  ( tailscale "${args[@]}" --timeout=600s > "$log" 2>&1 & )
+  for i in $(seq 1 30); do
+    url=$(grep -oE 'https?://[^[:space:]]+' "$log" | head -1)
+    [ -n "$url" ] && break
+    ts_laeuft && break
+    sleep 1
+  done
+  [ -n "$url" ] && ts_link_melden "$url"
+  for i in $(seq 1 600); do ts_laeuft && break; sleep 1; done
+  rm -f "$log"
+  ts_laeuft || fehler "Die Tailscale-Anmeldung wurde nicht bestätigt / the Tailscale sign-in was not confirmed"
+}
+
+# Nach einem Neustart soll Docker an die 100.x-Adresse binden können, auch wenn tailscaled noch verbindet.
+ts_bindung_absichern() {
+  printf 'net.ipv4.ip_nonlocal_bind = 1\n' > /etc/sysctl.d/90-reddrop-tailscale.conf 2>/dev/null || true
+  sysctl -q -w net.ipv4.ip_nonlocal_bind=1 >/dev/null 2>&1 || true
+  if mit_systemd; then
+    mkdir -p /etc/systemd/system/docker.service.d
+    printf '[Unit]\nAfter=tailscaled.service\nWants=tailscaled.service\n' > /etc/systemd/system/docker.service.d/nach-tailscale.conf
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+}
+
+# Firewall: Datenbank, Speicherdienst und NFS über Tailscale nur von eingebundenen Servern.
+# Eigene Kette RD-TS, beim Booten neu gesetzt (systemd), SSH und andere Dienste im Tailnet bleiben unberührt.
+ts_firewall_einrichten() {
+  mkdir -p "$TS_ORDNER"
+  touch "$TS_ERLAUBT"
+  cat > "$TS_FW" <<'FW'
+#!/bin/sh
+# RedDrop: Zugriff über Tailscale auf Datenbank, Speicherdienst und NFS nur von eingebundenen Servern.
+O=/etc/reddrop
+IP=$(cat "$O/ts-ip" 2>/dev/null); PORTE=$(cat "$O/ts-porte" 2>/dev/null)
+[ -n "$IP" ] || exit 0
+command -v iptables >/dev/null 2>&1 || exit 0
+# raw/PREROUTING: läuft vor Dockers Umleitung (DNAT) und vor den Ketten von Tailscale (ts-input, ts-forward
+# nehmen alles von tailscale0 an). Ziel ist hier noch die Tailscale-Adresse mit dem veröffentlichten Port.
+iptables -t raw -N RD-TS 2>/dev/null || true
+iptables -t raw -F RD-TS
+while read -r a; do [ -n "$a" ] && iptables -t raw -A RD-TS -s "$a" -j RETURN; done < "$O/ts-erlaubt"
+iptables -t raw -A RD-TS -j DROP
+for p in 2049 $PORTE; do
+  iptables -t raw -C PREROUTING -i tailscale0 -d "$IP" -p tcp --dport "$p" -j RD-TS 2>/dev/null || iptables -t raw -I PREROUTING -i tailscale0 -d "$IP" -p tcp --dport "$p" -j RD-TS
+done
+FW
+  chmod 755 "$TS_FW"
+  printf '%s\n' "$(ts_eigene_ip)" > "$TS_ORDNER/ts-ip"
+  printf '%s %s\n' "$DB_PORT" "$GARAGE_PORT" > "$TS_ORDNER/ts-porte"
+  if mit_systemd; then
+    printf '%s\n' "[Unit]" "Description=RedDrop: Tailscale-Freigaben nur für eingebundene Server" "After=docker.service tailscaled.service" "Wants=docker.service" "[Service]" "Type=oneshot" "RemainAfterExit=yes" "ExecStart=$TS_FW" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/reddrop-ts-firewall.service
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable reddrop-ts-firewall.service >/dev/null 2>&1 || true
+  fi
+  "$TS_FW" || true
+}
+
+# Ablauf der Schlüssel (dieser Server und alle Geräte im Tailnet) fürs Panel, ohne API-Zugang: halbstündlich.
+ts_stand_einrichten() {
+  cat > /usr/local/bin/reddrop-ts-stand <<STAND
+#!/bin/sh
+tailscale status --json 2>/dev/null > "$DATEN/.ts-stand.neu" && mv -f "$DATEN/.ts-stand.neu" "$DATEN/.ts-stand" && chmod 644 "$DATEN/.ts-stand"
+STAND
+  chmod 755 /usr/local/bin/reddrop-ts-stand
+  if mit_systemd; then
+    printf '%s\n' "[Unit]" "Description=RedDrop: Tailscale-Stand" "[Service]" "Type=oneshot" "ExecStart=/usr/local/bin/reddrop-ts-stand" > /etc/systemd/system/reddrop-ts-stand.service
+    printf '%s\n' "[Unit]" "Description=RedDrop: Tailscale-Stand halbstündlich" "[Timer]" "OnBootSec=2min" "OnUnitActiveSec=30min" "[Install]" "WantedBy=timers.target" > /etc/systemd/system/reddrop-ts-stand.timer
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable --now reddrop-ts-stand.timer >/dev/null 2>&1 || true
+  elif [ -d /etc/cron.d ]; then
+    printf '%s\n' "*/30 * * * * root /usr/local/bin/reddrop-ts-stand >/dev/null 2>&1" > /etc/cron.d/reddrop-ts-stand
+  fi
+  /usr/local/bin/reddrop-ts-stand || true
+}
+
+ts_vorbereiten() {
+  local nfs="$1" key="$2" ls="$3" vorhanden=false pfad="" ip
+  [ "$nfs" = "-" ] && nfs=""; [ "$ls" = "-" ] && ls=""; [ "$key" = "-" ] && key=""
+  ts_installieren
+  if ts_laeuft; then vorhanden=true; rm -f "$key"; else ts_anmelden "$key" "$ls"; fi
+  ip=$(ts_ip)
+  ts_gueltige_ip "$ip" || fehler "Keine Tailscale-Adresse / no Tailscale address"
+  printf '{"ip":"%s","vorhanden":%s}\n' "$ip" "$vorhanden" > "$TS_INFO"
+  ts_bindung_absichern
+  if [ "$nfs" = "nfs" ]; then
+    pfad=$(daten_quelle)
+    [ -d "$pfad" ] || fehler "Der Datenordner wurde nicht gefunden / data folder not found"
+    ( nfs_dienst ) || exit 1
+    mkdir -p /etc/exports.d; touch "$TS_EXPORTS"
+  elif [ -f "$DATEN/.knoten-tunnel" ]; then
+    pfad=$(sed -n 's/.*"nfsPfad":"\([^"]*\)".*/\1/p' "$DATEN/.knoten-tunnel" | head -1)
+  fi
+  compose_erweitern
+  ts_firewall_einrichten
+  ts_stand_einrichten
+  info_schreiben "$pfad"
+}
+
+ts_exports_schreiben() {
+  local quelle ip
+  quelle=$(sed -n 's/.*"nfsPfad":"\([^"]*\)".*/\1/p' "$DATEN/.knoten-tunnel" 2>/dev/null | head -1)
+  [ -n "$quelle" ] || return 0
+  mkdir -p /etc/exports.d
+  : > "$TS_EXPORTS.neu"
+  while read -r ip; do [ -n "$ip" ] && printf '"%s" %s(rw,sync,no_subtree_check,no_root_squash,fsid=87)\n' "$quelle" "$ip" >> "$TS_EXPORTS.neu"; done < "$TS_ERLAUBT"
+  mv -f "$TS_EXPORTS.neu" "$TS_EXPORTS"
+  exportfs -ra || fehler "Die NFS-Freigabe schlug fehl / NFS export failed"
+}
+
+ts_ufw() {
+  command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active' || return 0
+  if [ "$1" = an ]; then ufw allow in on tailscale0 from "$2" to any port 2049 proto tcp comment 'RedDrop Knoten NFS' >/dev/null 2>&1 || true
+  else ufw delete allow in on tailscale0 from "$2" to any port 2049 proto tcp >/dev/null 2>&1 || true; fi
+}
+
+ts_peer_eintragen() {
+  local ip="$1"
+  ts_gueltige_ip "$ip" || fehler "Ungültige Tailscale-Adresse: $ip"
+  [ -f "$TS_INFO" ] || fehler "Tailscale ist auf diesem Server nicht eingerichtet / Tailscale is not set up on this server"
+  mkdir -p "$TS_ORDNER"; touch "$TS_ERLAUBT"
+  grep -qxF "$ip" "$TS_ERLAUBT" || echo "$ip" >> "$TS_ERLAUBT"
+  ts_exports_schreiben
+  ts_ufw an "$ip"
+  "$TS_FW" || true
+}
+
+ts_peer_austragen() {
+  local ip="$1"
+  ts_gueltige_ip "$ip" || fehler "Ungültige Tailscale-Adresse: $ip"
+  [ -f "$TS_ERLAUBT" ] && sed -i "/^$ip\$/d" "$TS_ERLAUBT"
+  ts_exports_schreiben
+  ts_ufw aus "$ip"
+  [ -x "$TS_FW" ] && "$TS_FW" || true
 }
 
 aktion="${1:-}"
@@ -378,6 +587,20 @@ case "$aktion" in
     ( web_aus "$1" ) || rc=1
     if [ -f "$WEB" ]; then sed -i "/^$1\$/d" "$WEB"; fi
     peer_austragen "$1"
+    exit "$rc"
+    ;;
+  ts-vorbereiten) ts_vorbereiten "${1:--}" "${2:--}" "${3:--}" ;;
+  ts-peer)
+    ts_gueltige_ip "${1:-}" || fehler "Ungültige Tailscale-Adresse: ${1:-}"
+    ts_peer_eintragen "$1"
+    if [ "${2:-}" = "web" ]; then web_an "$1"; fi
+    ;;
+  ts-peer-weg)
+    ts_gueltige_ip "${1:-}" || fehler "Ungültige Tailscale-Adresse: ${1:-}"
+    rc=0
+    ( web_aus "$1" ) || rc=1
+    if [ -f "$WEB" ]; then sed -i "/^$1\$/d" "$WEB"; fi
+    ts_peer_austragen "$1"
     exit "$rc"
     ;;
   web-neu) if [ -s "$WEB" ]; then web_verteilen; fi ;;

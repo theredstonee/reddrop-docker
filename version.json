@@ -1,18 +1,16 @@
 {
-  "version": "1.10.0",
+  "version": "1.11.0",
   "datum": "2026-11-08",
   "hinweise": {
     "de": [
-      "Neu: RedDrop als Laufwerk. Unter Einstellungen → Laufwerk & Apps findest du die WebDAV-Adresse für Explorer, Finder, Dateimanager und rclone. Im Laufwerk liegen deine Dateien, mit Pro deine Team-Ordner und deine Speicher-Boxen.",
-      "Jedes Gerät bekommt ein eigenes App-Passwort, nur lesen oder lesen und schreiben. Konto-Passwort, Zwei-Faktor und Passkeys bleiben unberührt, ein Gerät lässt sich jederzeit einzeln sperren. Gelöschtes landet wie im Browser im Papierkorb.",
-      "Neu: Desktop-App „RedDrop Laufwerk“ für Windows, macOS und Linux. Sie bindet RedDrop als echtes Laufwerk ein (Windows mit Buchstabe, auch für große Dateien), mit Zwischenspeicher und Autostart. Angemeldet wird über den Browser mit einem Code.",
-      "Neu: Handy-App ohne App-Store. RedDrop lässt sich auf dem Handy installieren, Fotos und Videos direkt aufnehmen, Dateien aus anderen Apps über „Teilen“ hochladen und einzelne Dateien offline auf dem Gerät behalten."
+      "Neu (Beta, Pro): Weitere Server lassen sich jetzt auch über Tailscale anbinden. Das hilft bei Servern hinter NAT, im Heimnetz oder ohne offenen Port. Unter Speicher & Server → Weiteren Server hinzufügen wählst du „Tailscale“.",
+      "Ist ein Server schon in deinem Tailnet, ändert RedDrop nichts an der Verbindung. Sonst meldet er sich mit einem verschlüsselt gespeicherten Auth-Key an oder über einen Link, den du einmal bestätigst. Ein eigener Steuerserver (Headscale) wird ebenfalls unterstützt.",
+      "Datenbank, Speicherdienst und Datenordner werden nur für die Tailscale-Adressen deiner Server freigegeben, nicht für das ganze Tailnet. Läuft der Tailscale-Schlüssel eines Servers bald ab, warnt RedDrop 14 Tage vorher und zeigt, was zu tun ist."
     ],
     "en": [
-      "New: RedDrop as a drive. Settings → Drive & apps shows the WebDAV address for Explorer, Finder, file managers and rclone. The drive holds your files, your team folders with Pro, and your storage boxes.",
-      "Every device gets its own app password, read only or read and write. Account password, two-factor and passkeys stay untouched, and each device can be locked on its own at any time. Deleted items go to the trash as in the browser.",
-      "New: the “RedDrop Drive” desktop app for Windows, macOS and Linux. It mounts RedDrop as a real drive (on Windows with a letter, also for large files), with a cache and autostart. Sign-in works through the browser with a code.",
-      "New: a phone app without an app store. RedDrop can be installed on your phone, take photos and videos directly, upload files from other apps via “Share” and keep single files offline on the device."
+      "New (beta, Pro): additional servers can now also be connected via Tailscale. This helps with servers behind NAT, in a home network or without an open port. Under Storage & servers → Add another server, choose “Tailscale”.",
+      "If a server is already in your tailnet, RedDrop changes nothing about the connection. Otherwise it signs in with an auth key stored encrypted, or via a link you confirm once. Your own control server (Headscale) is supported as well.",
+      "Database, storage service and data folder are opened only to the Tailscale addresses of your servers, not to the whole tailnet. If a server's Tailscale key is about to expire, RedDrop warns 14 days ahead and shows what to do."
     ]
   }
 }
