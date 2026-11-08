@@ -1,20 +1,18 @@
 {
-  "version": "1.9.2",
-  "datum": "2026-11-05",
+  "version": "1.10.0",
+  "datum": "2026-11-08",
   "hinweise": {
     "de": [
-      "Neu: RedDrop verbindet sich mit RedNetz. Dort erscheint dein Verbund als Gruppe mit Hauptserver, weiteren Servern, Speicher und Alarmen. Im Panel unter Speicher & Server siehst du den Zustand aus RedNetz.",
-      "So geht es: In RedNetz einen Token mit produkt:lesen anlegen und in RedDrop unter Speicher & Server eintragen. In RedDrop einen Lese-Token anlegen und in RedNetz unter Anbindungen eintragen. Geteilt wird nur der Zustand, keine Dateinamen und keine Nutzerdaten.",
-      "Beim Einladen eines weiteren Servers kann der RedNetz-Agent mit drauf, nur wenn du zustimmst. Scheitert er, tritt der Server trotzdem bei.",
-      "Pro: Weitere Server lassen sich aus RedNetz neu starten und aktualisieren. Das ist standardmäßig aus und steht im Protokoll.",
-      "Behoben: Der Beitritt meldete ohne Terminal (zum Beispiel per Ansible) einen Fehler zu /dev/tty, obwohl er durchlief."
+      "Neu: RedDrop als Laufwerk. Unter Einstellungen → Laufwerk & Apps findest du die WebDAV-Adresse für Explorer, Finder, Dateimanager und rclone. Im Laufwerk liegen deine Dateien, mit Pro deine Team-Ordner und deine Speicher-Boxen.",
+      "Jedes Gerät bekommt ein eigenes App-Passwort, nur lesen oder lesen und schreiben. Konto-Passwort, Zwei-Faktor und Passkeys bleiben unberührt, ein Gerät lässt sich jederzeit einzeln sperren. Gelöschtes landet wie im Browser im Papierkorb.",
+      "Neu: Desktop-App „RedDrop Laufwerk“ für Windows, macOS und Linux. Sie bindet RedDrop als echtes Laufwerk ein (Windows mit Buchstabe, auch für große Dateien), mit Zwischenspeicher und Autostart. Angemeldet wird über den Browser mit einem Code.",
+      "Neu: Handy-App ohne App-Store. RedDrop lässt sich auf dem Handy installieren, Fotos und Videos direkt aufnehmen, Dateien aus anderen Apps über „Teilen“ hochladen und einzelne Dateien offline auf dem Gerät behalten."
     ],
     "en": [
-      "New: RedDrop connects to RedNetz. Your cluster appears there as a group with the main server, additional servers, storage and alerts. The panel shows the state from RedNetz under Storage & servers.",
-      "How it works: Create a token with produkt:lesen in RedNetz and enter it in RedDrop under Storage & servers. Create a read token in RedDrop and enter it in RedNetz under Connections. Only the state is shared, no file names or user data.",
-      "When inviting another server, the RedNetz agent can be set up too, only if you agree. If that fails, the server still joins.",
-      "Pro: Additional servers can be restarted and updated from RedNetz. This is off by default and logged.",
-      "Fixed: Joining without a terminal (for example with Ansible) reported a /dev/tty error even though it finished."
+      "New: RedDrop as a drive. Settings → Drive & apps shows the WebDAV address for Explorer, Finder, file managers and rclone. The drive holds your files, your team folders with Pro, and your storage boxes.",
+      "Every device gets its own app password, read only or read and write. Account password, two-factor and passkeys stay untouched, and each device can be locked on its own at any time. Deleted items go to the trash as in the browser.",
+      "New: the “RedDrop Drive” desktop app for Windows, macOS and Linux. It mounts RedDrop as a real drive (on Windows with a letter, also for large files), with a cache and autostart. Sign-in works through the browser with a code.",
+      "New: a phone app without an app store. RedDrop can be installed on your phone, take photos and videos directly, upload files from other apps via “Share” and keep single files offline on the device."
     ]
   }
 }
